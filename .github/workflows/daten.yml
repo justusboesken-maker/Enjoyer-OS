@@ -1,0 +1,89 @@
+# Kursdaten von Yahoo und LBMA abrufen, Signale prüfen, bei Kauf-/Verkaufssignalen per Telegram melden
+# und die Website auf GitHub Pages veröffentlichen. Einrichtung: siehe README, Abschnitt „Betrieb“.
+name: Kursdaten, Signale und Website
+
+on:
+  schedule:
+    - cron: '15 17 * * 5'   # Freitag 17:15 UTC: Wochenschluss FTSE (Börsenschluss London) und Gold (LBMA-PM-Fixing)
+    - cron: '20 0 * * 1'    # Montag 00:20 UTC: Wochenschluss Bitcoin (Sonntag 24:00 UTC)
+    - cron: '40 21 * * *'   # täglich 21:40 UTC: Euro-Kurse für Bewertung und Performance
+  workflow_dispatch:
+    inputs:
+      testnachricht:
+        description: 'Telegram-Testnachricht mit dem aktuellen Regelstand senden'
+        type: boolean
+        default: false
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: kursdaten
+  cancel-in-progress: false
+
+jobs:
+  daten:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Tests (Rechenbeispiele aus der Übergabe)
+        run: npm test
+
+      - name: Kursdaten abrufen und Signale prüfen
+        run: node scripts/update-data.mjs
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TEST_NOTIFICATION: ${{ github.event_name == 'workflow_dispatch' && inputs.testnachricht && 'true' || 'false' }}
+
+      - name: Daten im Repo speichern
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add site/data/market.js
+          if git diff --cached --quiet; then
+            echo "Keine neuen Daten."
+          else
+            git commit -m "Kursdaten aktualisiert ($(date -u '+%Y-%m-%d %H:%M') UTC)"
+            git pull --rebase origin "${GITHUB_REF_NAME}"
+            git push origin "HEAD:${GITHUB_REF_NAME}"
+          fi
+
+      - name: Website als Pages-Artefakt
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  pages:
+    needs: daten
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - name: Ist GitHub Pages eingeschaltet?
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh api "repos/${GITHUB_REPOSITORY}/pages" --silent 2>/dev/null; then
+            echo "on=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "on=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::GitHub Pages ist noch aus. Einschalten unter Settings → Pages → Source: GitHub Actions."
+          fi
+
+      - name: Veröffentlichen
+        id: deploy
+        if: steps.check.outputs.on == 'true'
+        uses: actions/deploy-pages@v4

@@ -2,8 +2,9 @@
    Die App übernimmt sie beim ersten Aufruf. Änderungen im Browser werden lokal gespeichert
    und können als JSON exportiert werden. Status je Wert siehe Kommentar. */
 var START = {
-  version: 1,
+  version: 2,
   asOf: '2026-09-24',
+  repo: 'justusboesken-maker/Enjoyer-OS',
 
   /* Transaktionen (6.3). Startbestand laut Trade Republic. */
   tx: [
@@ -13,8 +14,9 @@ var START = {
       note: 'Startbestand laut Trade Republic. Kaufdaten fehlen (O-1). Annahme A-11: Kauf im Juni 2026, Tag unbekannt, vorsichtig der 30.06. angesetzt', src: 'screenshot', est: true }
   ],
 
-  /* Cash 3.402 € (FAKT). Verteilung auf die Bausteine OFFEN (O-5): null = nicht zugeordnet. */
-  cash: { total: 3402, date: '2026-09-24', ftse: null, btc: null, gold: null },
+  /* Cash 3.402 € (FAKT). Verteilung O-5 am 24.09.2026 geklärt: jeder Baustein bis zu seinem Ziel,
+     FTSE 44,71 €, Bitcoin 522,39 € und Gold 2.834,90 € (wartet auf das Gold-Kaufsignal). */
+  cash: { total: 3402, date: '2026-09-24', ftse: 44.71, btc: 522.39, gold: 2834.90 },
 
   /* Euro-Kurse für die Bewertung (A-4, O-16). */
   prices: {
@@ -57,7 +59,7 @@ var START = {
     o15: null,                 /* O-15: null = offen, gerechnet wie der Prototyp */
     priceSource: null,         /* O-16 */
     o6: null,                  /* O-6: Startentscheidung Bitcoin ('regel' | 'halten') */
-    o11: '',                   /* O-11: Kanal, Hosting, Login (Freitext) */
+    o11: 'Telegram über GitHub Actions; Hosting auf GitHub Pages, öffentlich ohne Login (24.09.2026)', /* O-11 */
     o12: null,                 /* O-12: LBMA-Fixing 'PM' | 'AM'; gerechnet wird mit PM (A-5) */
     o13: '',                   /* O-13: neues Geld und Entnahmen (Freitext) */
     o14: null,                 /* O-14: fehlende Kursdaten 'warten' | 'ersatz' | 'hinweis' */

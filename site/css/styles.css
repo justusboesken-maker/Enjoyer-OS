@@ -34,6 +34,7 @@
   --violet: #4a3aa7;
   --accent: #2a78d6;
   --accent-ink: #1c5cab;
+  --tint-base: #ffffff;
 
   --radius: 12px;
   --radius-s: 8px;
@@ -69,6 +70,7 @@
     --violet: #9085e9;
     --accent: #3987e5;
     --accent-ink: #86b6ef;
+    --tint-base: #7a7973;
   }
 }
 :root[data-theme="dark"] {
@@ -98,6 +100,7 @@
   --violet: #9085e9;
   --accent: #3987e5;
   --accent-ink: #86b6ef;
+  --tint-base: #7a7973;
 }
 
 * { box-sizing: border-box; }
@@ -150,12 +153,15 @@ code { font-family: var(--mono); font-size: 0.9em; background: var(--surface-2);
   border-bottom: 2px solid transparent; white-space: nowrap;
 }
 .tabs a:hover { color: var(--ink); }
-.tabs a[aria-current="page"] { color: var(--ink); border-bottom-color: var(--ink); }
+.tabs a[aria-current="true"] { color: var(--ink); border-bottom-color: var(--ink); }
 .tabs .count { display: inline-block; margin-left: 4px; padding: 0 6px; border-radius: 10px; font-size: 11px; line-height: 17px; background: var(--surface-3); color: var(--ink-2); }
 
 main { max-width: 1200px; margin: 0 auto; padding: 20px 16px 48px; }
-.view { display: none; }
-.view.active { display: block; }
+/* Durchgehende Seite: Abschnitte untereinander, Anker landen unter der festen Kopfzeile */
+.page-section { padding-bottom: 28px; margin-bottom: 28px; border-bottom: 1px solid var(--border); }
+.page-section:last-child { border-bottom: 0; }
+[id] { scroll-margin-top: 112px; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .view-head { display: flex; flex-wrap: wrap; align-items: end; justify-content: space-between; gap: 8px 16px; margin-bottom: 16px; }
 .view-head p { margin: 4px 0 0; color: var(--ink-2); max-width: 70ch; }
 
@@ -376,6 +382,23 @@ details > .details-body { padding: 0 0 12px; }
 .stackbar > div.cash { background: var(--cash); color: var(--ink); }
 .stackbar > div.tight { color: transparent; }
 .stackbar > div:hover { filter: brightness(1.08); }
+
+/* Kreisdiagramme Ist und Ziel */
+.pies { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.pie { margin: 0; display: flex; flex-direction: column; align-items: center; gap: 10px; min-width: 0; }
+.pie figcaption { font-weight: 650; font-size: 15px; align-self: stretch; text-align: center; }
+.donut { width: 100%; max-width: 230px; display: flex; justify-content: center; }
+.donut svg { overflow: visible; }
+.donut .donut-seg { cursor: pointer; outline: none; transition: opacity .15s; }
+.donut .donut-seg:hover, .donut .donut-seg:focus-visible { opacity: 0.82; }
+.donut-title { fill: var(--ink); font: 650 16px var(--font); }
+.donut-sub { fill: var(--muted); font: 13px var(--font); }
+.pie-legend { list-style: none; margin: 0; padding: 0; width: 100%; display: grid; gap: 4px; font-size: 13px; }
+.pie-legend li { display: grid; grid-template-columns: 12px 1fr auto; gap: 2px 8px; align-items: center; }
+.pie-legend li i { width: 10px; height: 10px; border-radius: 3px; }
+.pie-legend li b { font-variant-numeric: tabular-nums; text-align: right; }
+.pie-legend li .muted { grid-column: 2 / -1; font-size: 12px; margin-top: -2px; }
+@media (max-width: 520px) { .pies { gap: 10px; } .pie-legend { font-size: 12px; } .hide-s { display: none; } }
 
 /* Messbalken (Pauschbetrag, Freigrenze) */
 .meter { position: relative; height: 12px; background: var(--surface-3); border-radius: 6px; display: flex; gap: 2px; overflow: hidden; }

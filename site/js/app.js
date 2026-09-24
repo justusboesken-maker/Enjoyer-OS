@@ -80,7 +80,16 @@
 
   /* ================= Zustand ================= */
   function clone(o) { return JSON.parse(JSON.stringify(o)); }
-  function defaults() { var s = clone(START); delete s.comex; s.weekly = { ftse: [], btc: [], gold: [] }; return s; }
+  function defaults() { var s = clone(START); delete s.comex; delete s.repo; s.weekly = { ftse: [], btc: [], gold: [] }; return s; }
+  /* Ältere Speicherstände anheben: Version 2 bringt die Cash-Zuordnung O-5 und die Entscheidung O-11 vom 24.09.2026 */
+  function migrate(s) {
+    if (!(s.version >= 2)) {
+      if (A.every(function (a) { return s.cash[a] == null; })) A.forEach(function (a) { s.cash[a] = START.cash[a]; });
+      if (!s.settings.o11) s.settings.o11 = START.settings.o11;
+      s.version = 2;
+    }
+    return s;
+  }
   function fillMissing(def, obj) {
     Object.keys(def).forEach(function (k) {
       if (!(k in obj)) obj[k] = clone(def[k]);
@@ -103,15 +112,37 @@
     return s;
   }
   function load() {
-    try { var raw = localStorage.getItem(KEY); if (raw) return sanitize(fillMissing(defaults(), JSON.parse(raw))); } catch (e) { /* privater Modus o. Ä. */ }
+    try { var raw = localStorage.getItem(KEY); if (raw) return migrate(sanitize(fillMissing(defaults(), JSON.parse(raw)))); } catch (e) { /* privater Modus o. Ä. */ }
     return defaults();
   }
   function save() { try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) { /* ignorieren */ } }
-  function saveUi() { try { localStorage.setItem(UIKEY, JSON.stringify({ range: ui.range, tab: ui.tab })); } catch (e) { /* ignorieren */ } }
+  function saveUi() { try { localStorage.setItem(UIKEY, JSON.stringify({ range: ui.range, perfRange: ui.perfRange, perfMode: ui.perfMode })); } catch (e) { /* ignorieren */ } }
 
   var state = load();
-  var ui = { tab: 'uebersicht', range: 'max', hypo: {}, reb: { scen: 'depot', st: {}, px: {} }, sim: { a: 'btc', amount: null, px: null, date: null } };
-  try { var su = JSON.parse(localStorage.getItem(UIKEY) || '{}'); if (su.range) ui.range = su.range; } catch (e) { /* ignorieren */ }
+  var ui = { range: 'max', perfRange: 'max', perfMode: null, hypo: {}, reb: { scen: 'depot', st: {}, px: {} }, sim: { a: 'btc', amount: null, px: null, date: null } };
+  try {
+    var su = JSON.parse(localStorage.getItem(UIKEY) || '{}');
+    ['range', 'perfRange', 'perfMode'].forEach(function (k) { if (su[k]) ui[k] = su[k]; });
+  } catch (e) { /* ignorieren */ }
+
+  /* Kursdaten des Datenjobs (site/data/market.js). Fehlen sie, rechnet die App mit den Testdaten aus Anhang A. */
+  var MK = typeof MARKET !== 'undefined' && MARKET && MARKET.series ? MARKET : null;
+  var LIVE = !!(MK && MK.source !== 'anhang-a');
+  var BASE = MK ? MK.series : HIST;
+  var REPO = START.repo;
+  function autoPrice(a) {
+    var s = MK && MK.eur && MK.eur[a];
+    return s && s.d.length ? { px: s.c[s.c.length - 1], d: s.d[s.d.length - 1], src: 'Yahoo ' + META[a].eurSym + ', automatisch', auto: true } : null;
+  }
+  /* Bewertungskurs je Anlage: der neueste Wert aus automatischem Abruf und manueller Eingabe */
+  function effPrices() {
+    var out = {};
+    A.forEach(function (a) {
+      var man = state.prices[a], au = autoPrice(a);
+      out[a] = au && (!(man.px > 0) || !man.d || au.d >= man.d) ? au : Object.assign({ auto: false }, man);
+    });
+    return out;
+  }
   var M = null;
 
   function getPath(obj, path) { return path.split('.').reduce(function (o, k) { return o == null ? undefined : o[k]; }, obj); }
@@ -120,13 +151,18 @@
   /* ================= Berechnung ================= */
   function compute() {
     var today = todayIso();
-    var S = LOGIC.buildSeries(HIST, state.weekly), R = LOGIC.evalAll(S);
-    var pf = LOGIC.portfolio(state.tx, state.prices, state.cash);
+    /* Manuell nachgetragene Wochen nur, solange der Datenjob sie noch nicht geliefert hat */
+    var weekly = {};
+    A.forEach(function (a) { var lastK = BASE[a].k[BASE[a].k.length - 1]; weekly[a] = (state.weekly[a] || []).filter(function (w) { return w.k > lastK; }); });
+    var S = LOGIC.buildSeries(BASE, weekly), R = LOGIC.evalAll(S);
+    var prices = effPrices();
+    var pf = LOGIC.portfolio(state.tx, prices, state.cash);
+    var perf = MK && MK.eur ? LOGIC.performance(state.tx, MK.eur, state.cash, today) : null;
     var cfg = LOGIC.taxCfg(state.tax, state.settings, pf.cash.total, today);
     var ty = ENG.taxYear(cfg, pf.real, state.tax.year);
     var rec = {};
     A.forEach(function (a) { rec[a] = LOGIC.recommend(a, R[a], pf.pos[a].held); });
-    return { today: today, S: S, R: R, pf: pf, cfg: cfg, ty: ty, rec: rec };
+    return { today: today, S: S, R: R, pf: pf, cfg: cfg, ty: ty, rec: rec, prices: prices, perf: perf, weekly: weekly };
   }
 
   /* ================= Fachtexte ================= */
@@ -204,8 +240,10 @@
   function openCount() { return QUESTIONS.filter(function (q) { return !q.done(); }).length; }
 
   /* ================= Eingabe-Bausteine ================= */
+  var ID_SCOPE = ''; /* Abschnitt, der gerade gerendert wird: macht Feld-IDs seitenweit eindeutig */
+  function fid(path) { return 'f-' + (ID_SCOPE ? ID_SCOPE + '-' : '') + path.replace(/\./g, '-'); }
   function field(path, label, type, placeholder, hint) {
-    var v = getPath(state, path), id = 'f-' + path.replace(/\./g, '-');
+    var v = getPath(state, path), id = fid(path);
     var val = v == null ? '' : type === 'pct' ? (ok(v) ? LOGIC.round(v * 100, 4) : '') : v;
     var itype = type === 'pct' || type === 'num' ? 'number' : type === 'date' ? 'date' : type === 'time' ? 'time' : 'text';
     return '<div class="field"><label for="' + id + '">' + esc(label) + '</label><input id="' + id + '" type="' + itype + '"' +
@@ -215,7 +253,7 @@
   }
   function sel(path, opts, label) {
     var v = getPath(state, path); v = v == null ? '' : String(v);
-    var id = 'f-' + path.replace(/\./g, '-');
+    var id = fid(path);
     return '<div class="field">' + (label ? '<label for="' + id + '">' + esc(label) + '</label>' : '') + '<select id="' + id + '" data-set="' + path + '" data-type="str"' + (label ? '' : ' aria-label="Antwort"') + '>' +
       opts.map(function (o) { return '<option value="' + esc(o[0]) + '"' + (String(o[0]) === v ? ' selected' : '') + '>' + esc(o[1]) + '</option>'; }).join('') + '</select></div>';
   }
@@ -283,19 +321,19 @@
   function viewOverview() {
     var pf = M.pf, today = M.today, gain = pf.invested - pf.cost;
     var h = '';
-    var stale = A.filter(function (a) { var p = state.prices[a]; return pf.pos[a].held && p && p.d && ENG.daysBetween(p.d, today) > 7; });
-    var missingPx = A.filter(function (a) { return pf.pos[a].held && !(state.prices[a] && state.prices[a].px > 0); });
+    var stale = A.filter(function (a) { var p = M.prices[a]; return pf.pos[a].held && p && p.d && ENG.daysBetween(p.d, today) > 7; });
+    var missingPx = A.filter(function (a) { return pf.pos[a].held && !(M.prices[a] && M.prices[a].px > 0); });
 
-    h += '<div class="card"><div class="hero"><div><div class="hero-label">Depotwert</div>' +
+    h += '<h2 class="sr-only">Übersicht</h2><div class="card"><div class="hero"><div><div class="hero-label">Depotwert</div>' +
       '<div class="hero-value">' + eur(pf.total) + '</div>' +
-      '<div class="hero-meta">Positionen ' + eur(pf.invested) + ' · Cash ' + eur(pf.cash.total) + ' · Kurse: ' + A.filter(function (a) { return pf.pos[a].held; }).map(function (a) { return META[a].instr + ' ' + fdate(state.prices[a].d); }).join(', ') + '</div></div>' +
+      '<div class="hero-meta">Positionen ' + eur(pf.invested) + ' · Cash ' + eur(pf.cash.total) + ' · Kurse: ' + A.filter(function (a) { return pf.pos[a].held; }).map(function (a) { return META[a].instr + ' ' + fdate(M.prices[a].d); }).join(', ') + (LIVE ? ' (Yahoo)' : '') + '</div></div>' +
       '<div class="tiles" style="flex:1;min-width:280px;max-width:640px">' +
       tile('Einstand der Positionen', eur(pf.cost), 'FIFO, inklusive Gebühren') +
       tile('Gewinn / Verlust', '<span class="' + (gain >= 0 ? 'pos' : 'neg') + '">' + eurS(gain) + '</span>', pct(pf.cost > 0 ? gain / pf.cost : NaN, 2, true) + ' auf den Einstand') +
       tile('Cash', eur(pf.cash.total), pct(pf.cash.total / pf.total, 1) + ' des Depots · Zins ' + pct(state.tax.interestRate, 1)) +
       '</div></div>';
     if (stale.length || missingPx.length) {
-      h += '<div class="notes" style="margin-top:12px">' + stale.map(function (a) { return '<div class="note warn">Kurs für ' + META[a].instr + ' ist vom ' + fdate(state.prices[a].d) + ' und damit veraltet. Aktualisieren unter Depot → Euro-Kurse.</div>'; }).join('') +
+      h += '<div class="notes" style="margin-top:12px">' + stale.map(function (a) { return '<div class="note warn">Kurs für ' + META[a].instr + ' ist vom ' + fdate(M.prices[a].d) + ' und damit veraltet. ' + (LIVE ? 'Der Datenjob hat keinen neueren Kurs geliefert.' : 'Aktualisieren unter Depot → Euro-Kurse.') + '</div>'; }).join('') +
         missingPx.map(function (a) { return '<div class="note crit">Für ' + META[a].instr + ' fehlt ein Euro-Kurs. Der Depotwert ist unvollständig.</div>'; }).join('') + '</div>';
     }
     h += '</div>';
@@ -315,12 +353,12 @@
       h += '<div class="small ink2">Nächster Wochenschluss: <b>' + wd(nd) + '</b> ' + (a === 'btc' ? '24:00 UTC' : a === 'gold' ? '(PM-Fixing 15:00 London)' : '(Börsenschluss London)') +
         ' · ' + countdown(closeMoment(a, nd)) + '<br>' + esc(nextStepText(a, res)) + '.</div>' +
         missingCloseNote(a) +
-        '<div><a href="#signale" data-goto="sig-' + a + '" class="small">Signal im Detail →</a></div></div>';
+        '<div><a href="#charts" data-goto="sig-' + a + '" class="small">Signal im Detail →</a></div></div>';
     });
     h += '</div>';
 
-    /* Ist gegen Ziel + Termine */
-    h += '<div class="grid grid-2" style="margin-top:16px">' + weightsCard() + timelineCard() + '</div>';
+    /* Termine + Daten und Benachrichtigungen */
+    h += '<div class="grid grid-2" style="margin-top:16px">' + timelineCard() + statusCard() + '</div>';
 
     /* Offene Punkte */
     var open = QUESTIONS.filter(function (q) { return !q.done(); });
@@ -329,6 +367,32 @@
       '<div class="progress" role="img" aria-label="' + (17 - open.length) + ' von 17 geklärt"><div style="width:' + ((17 - open.length) / 17 * 100) + '%"></div></div>' +
       '<p class="small ink2" style="margin-top:6px">' + (17 - open.length) + ' von 17 geklärt. Die App rät bei offenen Punkten nicht, sondern lässt die Felder leer oder rechnet sichtbar mit der dokumentierten Annahme.</p>' +
       (urgent.length ? '<div class="questions">' + urgent.map(questionHtml).join('') + '</div>' : '') + '</div>';
+    return h;
+  }
+
+  function statusCard() {
+    var h = '<div class="card" id="status"><div class="card-head"><h3>Kursdaten und Benachrichtigungen</h3>' + chip('geklaert', 'O-11') + '</div><div class="notes">';
+    if (LIVE) {
+      var age = (Date.now() - Date.parse(MK.updated)) / 864e5;
+      h += '<div class="note' + (age > 3 ? ' warn' : ' good') + '"><div><b>Kursdaten automatisch</b> von Yahoo Finance und LBMA, zuletzt abgerufen am ' + fdate(MK.updated.slice(0, 10)) + ' um ' + MK.updated.slice(11, 16) + ' UTC' +
+        (age > 3 ? '. <b>Seit über drei Tagen kein Abruf</b>: Workflow prüfen.' : '.') + '</div></div>';
+    } else {
+      h += '<div class="note warn"><div><b>Noch keine automatischen Kursdaten.</b> Die Signale beruhen auf den Testdaten aus Anhang A (bis 18./20.09.2026). Der Datenjob läuft, sobald dieser Stand auf <code>main</code> liegt (siehe README, „Betrieb“).</div></div>';
+    }
+    (MK && MK.warnings || []).slice(0, 4).forEach(function (w) { if (LIVE) h += '<div class="note"><div>' + esc(w) + ' ' + qref('O-14') + '</div></div>'; });
+    var nt = MK && MK.notify, tg;
+    if (!nt || nt.configured == null) tg = 'Telegram: Status unbekannt, der Datenjob ist noch nicht gelaufen.';
+    else if (!nt.configured) tg = '<b>Telegram ist noch nicht eingerichtet</b>: Die Secrets TELEGRAM_BOT_TOKEN und TELEGRAM_CHAT_ID fehlen im Repo.';
+    else tg = '<b>Telegram eingerichtet.</b> ' + (nt.lastSent ? 'Zuletzt gesendet am ' + fdate(nt.lastSent.slice(0, 10)) + '.' : 'Noch keine Nachricht gesendet.');
+    h += '<div class="note' + (nt && nt.configured ? ' good' : '') + '"><div>' + tg + (nt && nt.lastError ? '<br><span class="neg">Letzter Fehler: ' + esc(nt.lastError) + '</span>' : '') +
+      '<br>Nachricht bei jedem neuen Kauf- oder Verkaufssignal ' + chip('beschlossen') + '. Vorwarnungen folgen, sobald Abstand und Zeiten festgelegt sind ' + qref('O-7') + '.</div></div>';
+    h += '</div>';
+    var ev = (MK && MK.events) || [];
+    h += '<h4 style="margin:14px 0 6px">Gemeldete Signale</h4>' + (ev.length ? '<ul class="timeline">' + ev.slice(0, 5).map(function (e) {
+      return '<li><span class="when">' + fdm(e.d) + '<small>' + e.d.slice(0, 4) + '</small></span><span><b>' + (e.to === 1 ? '▲ Kaufsignal ' : '▼ Verkaufssignal ') + META[e.a].name + '</b><br><span class="small ink2">Handel Mo ' + fdate(e.trade) + ' · ' + esc(e.note || '') + '</span></span><span></span></li>';
+    }).join('') + '</ul>' : '<p class="small muted">Noch keine. Der Datenjob meldet nur Signale, die nach seinem ersten Lauf entstehen.</p>');
+    h += '<p class="small muted" style="margin-top:10px">Zeitplan: Freitag 17:15 UTC (FTSE, Gold), Montag 00:20 UTC (Bitcoin), täglich 21:40 UTC (Euro-Kurse). ' +
+      '<a href="https://github.com/' + REPO + '/actions/workflows/daten.yml" target="_blank" rel="noopener">Workflow öffnen</a>: dort unter „Run workflow“ auch eine Testnachricht senden.</p></div>';
     return h;
   }
 
@@ -357,26 +421,44 @@
     return '<div class="note warn">Der Wochenschluss vom ' + wd(nd) + ' fehlt noch. Unter Signale → „Wochenschluss nachtragen“ eintragen. ' + qref('O-14') + '</div>';
   }
 
-  function weightsCard() {
-    var pf = M.pf, T = pf.total, rows = '', ist = [], ziel = [];
+  var DONUTS = {};
+  function piesCard() {
+    var pf = M.pf, T = pf.total, ist = [], ziel = [], rows = '', legIst = [], legZiel = [];
+    function tint(a) { return 'color-mix(in srgb, var(--' + a + ') 40%, var(--tint-base))'; }
     A.forEach(function (a) {
-      var v = (ok(pf.pos[a].value) ? pf.pos[a].value : 0) + pf.cash[a], w = v / T, target = RS.weights[a];
-      ist.push({ c: a, w: w, label: META[a].name, v: v });
-      ziel.push({ c: a, w: target, label: META[a].name, v: T * target });
+      var v = ok(pf.pos[a].value) ? pf.pos[a].value : 0, c = pf.cash[a], tot = v + c, target = RS.weights[a];
+      if (v > 0.005) { ist.push({ label: META[a].name + ' investiert', value: v, fill: 'var(--' + a + ')' }); legIst.push(['var(--' + a + ')', META[a].name + ' investiert', v]); }
+      if (c > 0.005) { ist.push({ label: META[a].name + ' Cash', value: c, fill: tint(a) }); legIst.push([tint(a), META[a].name + ' Cash', c]); }
+      ziel.push({ label: META[a].name, value: T * target, fill: 'var(--' + a + ')' }); legZiel.push(['var(--' + a + ')', META[a].name, T * target]);
       rows += '<tr><td><span class="cell-asset"><span class="key ' + a + '"></span>' + META[a].name + '</span><br><span class="muted small nowrap">Ziel ' + pct(target, 0) + ' = ' + eur(T * target) + '</span></td>' +
-        '<td class="r">' + pct(w, 1) + '<br><span class="muted small">' + eur(v) + '</span></td>' +
-        '<td class="r">' + eurS(v - T * target) + '<br><span class="muted small">' + sgn((w - target) * 100, 1) + num((w - target) * 100, 1) + ' Pp.</span></td></tr>';
+        '<td class="r">' + pct(tot / T, 1) + '<br><span class="muted small">' + eur(tot) + '</span></td>' +
+        '<td class="r hide-s">' + eur(c) + '<br><span class="muted small">' + (tot > 0 ? pct(c / tot, 0) + ' des Bausteins' : '') + '</span></td>' +
+        '<td class="r">' + eurS(tot - T * target) + '<br><span class="muted small">' + sgn((tot / T - target) * 100, 1) + num((tot / T - target) * 100, 1) + ' Pp.</span></td></tr>';
     });
     if (Math.abs(pf.cash.frei) > 0.005) {
-      ist.push({ c: 'cash', w: pf.cash.frei / T, label: 'Cash, nicht zugeordnet', v: pf.cash.frei });
-      rows += '<tr><td><span class="cell-asset"><span class="key cash"></span>Cash, nicht zugeordnet</span> ' + qref('O-5') + '</td><td class="r">' + pct(pf.cash.frei / T, 1) + '<br><span class="muted small">' + eur(pf.cash.frei) + '</span></td><td class="r">–</td></tr>';
+      ist.push({ label: 'Cash, nicht zugeordnet', value: pf.cash.frei, fill: 'var(--cash)' }); legIst.push(['var(--cash)', 'Cash, nicht zugeordnet', pf.cash.frei]);
+      rows += '<tr><td><span class="cell-asset"><span class="key cash"></span>Cash, nicht zugeordnet</span></td><td class="r">' + pct(pf.cash.frei / T, 1) + '<br><span class="muted small">' + eur(pf.cash.frei) + '</span></td><td class="r hide-s">' + eur(pf.cash.frei) + '</td><td class="r">–</td></tr>';
     }
-    var posW = A.filter(function (a) { return pf.pos[a].held; }).map(function (a) { return META[a].instr + ' ' + pct(pf.pos[a].value / T, 1); }).concat(['Cash ' + pct(pf.cash.total / T, 1)]).join(' · ');
-    return '<div class="card"><div class="card-head"><h3>Ist gegen Ziel 50/30/20</h3>' + chip('beschlossen', 'Zielgewichte') + '</div>' +
-      '<div class="bars"><div class="bar-row"><span class="bl">Ist</span>' + stackbar(ist) + '</div><div class="bar-row"><span class="bl">Ziel</span>' + stackbar(ziel) + '</div></div>' +
-      '<div class="legend" style="margin-top:10px">' + A.map(function (a) { return '<span><i class="key ' + a + '"></i>' + META[a].name + '</span>'; }).join('') + '<span><i class="key cash"></i>Cash, nicht zugeordnet</span></div>' +
-      '<div class="table-wrap"><table class="compact"><thead><tr><th>Baustein und Ziel</th><th class="r">Ist</th><th class="r" title="Abweichung vom Ziel">Abw.</th></tr></thead><tbody>' + rows + '</tbody></table></div>' +
-      '<p class="small muted" style="margin-top:8px">Ist je Baustein = Position + zugeordnetes Cash (A-1). Positionsgewichte wie in der Trade-Republic-App: ' + posW + '.</p></div>';
+    DONUTS = { ist: { segments: ist, title: eur(T, 0), sub: 'Ist' }, ziel: { segments: ziel, title: '50 / 30 / 20', sub: 'Ziel' } };
+    function legend(items) {
+      return '<ul class="pie-legend">' + items.map(function (x) {
+        return '<li><i style="background:' + x[0] + '"></i><span>' + esc(x[1]) + '</span><b>' + pct(x[2] / T, 1) + '</b><span class="muted">' + eur(x[2]) + '</span></li>';
+      }).join('') + '</ul>';
+    }
+    return '<div class="card" id="ist-ziel"><div class="card-head"><h3>Ist und Ziel</h3><span>' + chip('beschlossen', 'Ziel 50/30/20') + ' ' + chip('geklaert', 'Cash O-5') + '</span></div>' +
+      '<div class="pies"><figure class="pie"><figcaption>Ist</figcaption><div class="donut" data-donut="ist"></div>' + legend(legIst) + '</figure>' +
+      '<figure class="pie"><figcaption>Ziel</figcaption><div class="donut" data-donut="ziel"></div>' + legend(legZiel) + '</figure></div>' +
+      '<div class="table-wrap" style="margin-top:12px"><table class="compact"><thead><tr><th>Baustein und Ziel</th><th class="r">Ist</th><th class="r hide-s">davon Cash</th><th class="r" title="Abweichung vom Ziel">Abw.</th></tr></thead><tbody>' + rows + '</tbody></table></div>' +
+      '<p class="small muted" style="margin-top:8px">Ist je Baustein = Position + Cash des Bausteins ' + aref('A-1') + '. Das Cash ist noch nicht investiert: FTSE und Bitcoin warten auf die Umsetzung ab 28.09., Gold auf sein Kaufsignal. Zuordnung ändern unter „Cash je Baustein“.</p></div>';
+  }
+  function renderDonuts() {
+    var tip = document.getElementById('tooltip'), T = M.pf.total;
+    document.querySelectorAll('[data-donut]').forEach(function (el) {
+      var d = DONUTS[el.getAttribute('data-donut')]; if (!d) return;
+      var size = Math.max(150, Math.min(230, Math.round(el.clientWidth || 220)));
+      CHART.donut(el, { segments: d.segments, title: d.title, sub: d.sub, size: size, tip: tip, label: d.sub + ': Aufteilung des Depots',
+        fmt: function (v) { return pct(v / T, 1) + ' · ' + eur(v); } });
+    });
   }
   function stackbar(parts) {
     return '<div class="stackbar">' + parts.filter(function (p) { return p.w > 0.0005; }).map(function (p) {
@@ -411,14 +493,68 @@
   /* ================= Ansicht: Signale ================= */
   var RANGES = [['1j', '1 J', 52], ['3j', '3 J', 156], ['5j', '5 J', 260], ['max', 'Max', Infinity]];
 
-  function viewSignals() {
-    var n = M.S.ftse.c.length, h = '';
-    h += '<div class="view-head"><div><h2>Signale</h2><p>Regelstand zum letzten Wochenschluss, gerechnet mit US-Dollar-Kursen ' + chip('beschlossen') +
-      ' und dem SMA50 (Durchschnitt der letzten 50 Wochenschlüsse). Nur abgeschlossene Wochen zählen.</p></div></div>';
+  var PRANGES = [['1m', '1 M', 31], ['3m', '3 M', 92], ['6m', '6 M', 183], ['1j', '1 J', 366], ['max', 'Max', Infinity]];
+  var PERF = null;
+
+  function perfHtml() {
+    var p = M.perf, h = '<div class="view-head"><div><h2>Charts</h2><p>Oben die Entwicklung deines Depots in Euro, darunter die Signalcharts je Baustein.</p></div></div>';
+    h += '<div class="section-title" style="margin-top:0"><h3>Portfolio-Performance</h3>' + (LIVE ? chip('fakt', 'Yahoo, täglich') : '') + '</div>';
+    PERF = null;
+    var totalN = p ? p.total.filter(function (v) { return v != null; }).length : 0;
+    if (!p || !p.d.length) {
+      return h + '<div class="card"><div class="note"><div><b>Der Performance-Chart braucht tägliche Euro-Kurse.</b> Sie kommen mit dem ersten Lauf des Datenjobs von Yahoo (VWCE.DE, BTC-EUR, SGBS.MI) und werden danach täglich ergänzt. ' +
+        'Stand heute: Depotwert ' + eur(M.pf.total) + ', Gewinn der Positionen ' + eurS(M.pf.invested - M.pf.cost) + ' (' + pct(M.pf.cost > 0 ? (M.pf.invested - M.pf.cost) / M.pf.cost : NaN, 2, true) + ').</div></div></div>';
+    }
+    var mode = ui.perfMode || (totalN >= 10 ? 'total' : 'pos');
+    if (mode === 'total' && totalN < 2) mode = 'pos';
+    var r = PRANGES.filter(function (x) { return x[0] === ui.perfRange; })[0] || PRANGES[4];
+    var fromD = r[2] === Infinity ? p.d[0] : ENG.addDays(M.today, -r[2]);
+    var i0 = Math.max(0, p.d.findIndex(function (d) { return d >= fromD; }));
+    if (mode === 'total') { var ft = p.total.findIndex(function (v, i) { return i >= i0 && v != null; }); if (ft > i0) i0 = ft; }
+    var sl = function (arr) { return arr.slice(i0); };
+    var d = sl(p.d), val = sl(p.value), cost = sl(p.cost), tot = sl(p.total), last = d.length - 1;
+    var kpi, fmtY = null;
+    if (mode === 'total') {
+      var t0 = tot.find(function (v) { return v != null; }), t1 = tot[last];
+      PERF = { d: d, series: [{ label: 'Depotwert inkl. Cash', values: tot, color: 'var(--ink)', area: 'color-mix(in srgb, var(--ink) 6%, transparent)' }],
+        extra: function (i) { return tot[i] == null ? [] : [['seit ' + fdate(d[tot.indexOf(t0)]), eurS(tot[i] - t0) + ' (' + pct(tot[i] / t0 - 1, 2, true) + ')']]; } };
+      kpi = tile('Depotwert', eur(t1), 'am ' + fdate(d[last])) + tile('Veränderung im Zeitraum', '<span class="' + (t1 - t0 >= 0 ? 'pos' : 'neg') + '">' + eurS(t1 - t0) + '</span>', pct(t1 / t0 - 1, 2, true) + ' seit ' + fdate(d[tot.indexOf(t0)]));
+    } else if (mode === 'twr') {
+      /* Rendite im Zeitraum: auf den ersten Tag des Zeitraums normiert */
+      var tw = sl(p.twr), b0 = tw.find(function (v) { return v != null; }), rel = tw.map(function (v) { return v == null ? null : (1 + v) / (1 + b0) - 1; });
+      PERF = { d: d, series: [{ label: 'Rendite der Positionen (zeitgewichtet)', values: rel, color: 'var(--violet)', area: 'color-mix(in srgb, var(--violet) 10%, transparent)' }],
+        extra: function (i) { return val[i] == null ? [] : [['Wert der Positionen', eur(val[i])]]; }, pct: true };
+      kpi = tile('Rendite im Zeitraum', '<span class="' + (rel[last] >= 0 ? 'pos' : 'neg') + '">' + pct(rel[last], 2, true) + '</span>', 'zeitgewichtet, ohne Einfluss von Käufen') +
+        tile('Seit dem ersten Kauf', '<span class="' + (p.twr[p.twr.length - 1] >= 0 ? 'pos' : 'neg') + '">' + pct(p.twr[p.twr.length - 1], 2, true) + '</span>', 'ab ' + fdate(p.d[0]));
+    } else {
+      PERF = { d: d, series: [{ label: 'Wert der Positionen', values: val, color: 'var(--violet)', area: 'color-mix(in srgb, var(--violet) 10%, transparent)' }, { label: 'Einstand', values: cost, color: 'var(--ink-2)' }],
+        extra: function (i) { return val[i] == null ? [] : [['Gewinn', eurS(val[i] - cost[i]) + ' (' + pct(cost[i] > 0 ? val[i] / cost[i] - 1 : NaN, 2, true) + ')']]; } };
+      var g = LOGIC.round(val[last], 2) - LOGIC.round(cost[last], 2); /* in Cent wie in der Übersicht */
+      kpi = tile('Wert der Positionen', eur(val[last]), 'am ' + fdate(d[last])) + tile('Gewinn auf den Einstand', '<span class="' + (g >= 0 ? 'pos' : 'neg') + '">' + eurS(g) + '</span>', pct(cost[last] > 0 ? val[last] / cost[last] - 1 : NaN, 2, true));
+    }
+    h += '<div class="filter-row"><span><span class="lbl">Ansicht</span><span class="seg" role="group" aria-label="Ansicht">' +
+      '<button type="button" data-perf-mode="total" aria-pressed="' + (mode === 'total') + '"' + (totalN < 2 ? ' disabled title="Depotwert inkl. Cash gibt es erst ab dem Cash-Stichtag ' + fdate(state.cash.date) + '"' : '') + '>Depot gesamt</button>' +
+      '<button type="button" data-perf-mode="pos" aria-pressed="' + (mode === 'pos') + '">Positionen</button>' +
+      '<button type="button" data-perf-mode="twr" aria-pressed="' + (mode === 'twr') + '">Rendite %</button></span></span>' +
+      '<span><span class="lbl">Zeitraum</span><span class="seg" role="group" aria-label="Zeitraum Performance">' + PRANGES.map(function (x) {
+        return '<button type="button" data-perf-range="' + x[0] + '" aria-pressed="' + (r[0] === x[0]) + '">' + x[1] + '</button>';
+      }).join('') + '</span></span></div>';
+    h += '<div class="card"><div class="tiles" style="margin-bottom:14px">' + kpi + '</div>' +
+      '<div class="legend">' + PERF.series.map(function (x) { return '<span><i class="key line" style="background:' + x.color + '"></i>' + x.label + '</span>'; }).join('') + '</div>' +
+      '<div class="chart" data-perf></div>' +
+      '<p class="small muted" style="margin:8px 0 0">' + (mode === 'total' ? 'Positionen zu Yahoo-Schlusskursen plus Cash. Das Cash ist erst ab dem Cash-Stichtag ' + fdate(state.cash.date) + ' bekannt; davor zeigt die Ansicht „Positionen“ den Verlauf.'
+        : mode === 'twr' ? 'Zeitgewichtete Rendite: Käufe und Verkäufe zählen als Zu- und Abflüsse, nicht als Gewinn. So bleibt die Kurve vergleichbar, auch wenn du nachkaufst. '
+        : 'Positionen zu Yahoo-Schlusskursen gegen den FIFO-Einstand. Sprünge sind Käufe oder Verkäufe, keine Kursgewinne. ' + (state.tx.some(function (t) { return t.est; }) ? 'Mindestens ein Kaufdatum ist geschätzt ' + qref('O-1') + '.' : '')) + '</p></div>';
+    return h;
+  }
+
+  function viewCharts() {
+    var n = M.S.ftse.c.length, h = perfHtml();
+    h += '<div class="section-title"><h3>Signale</h3><span class="small ink2">Regelstand zum letzten Wochenschluss, US-Dollar-Kurse ' + chip('beschlossen') + ', SMA50 = Durchschnitt der letzten 50 Wochenschlüsse, nur abgeschlossene Wochen.</span></div>';
     h += '<div class="filter-row"><span><span class="lbl">Zeitraum</span><span class="seg" role="group" aria-label="Zeitraum">' + RANGES.map(function (r) {
       var dis = r[2] !== Infinity && r[2] >= n;
       return '<button type="button" data-range="' + r[0] + '" aria-pressed="' + (ui.range === r[0]) + '"' + (dis ? ' disabled title="Die Historie reicht erst bis ' + fdate(M.S.ftse.d[0]) + ' zurück"' : '') + '>' + r[1] + '</button>';
-    }).join('') + '</span></span><span class="small muted">Historie ab ' + fdate(M.S.ftse.d[0]) + ' (Testdaten aus Anhang A), erster SMA50 am ' + fdate(M.S.ftse.d[49]) + '.</span></div>';
+    }).join('') + '</span></span><span class="small muted">' + (LIVE ? 'Yahoo und LBMA, Stand ' + fdate(MK.updated.slice(0, 10)) : 'Testdaten aus Anhang A') + ', Historie ab ' + fdate(M.S.ftse.d[0]) + '.</span></div>';
     A.forEach(function (a) { h += signalCard(a); });
     h += historyCard();
     return h;
@@ -465,9 +601,9 @@
     h += '<div class="chart" data-chart="' + a + '"></div>';
     h += '<p class="small muted" style="margin:6px 0 0">Tipp: Mit der Maus oder dem Finger über das Diagramm fahren; mit Tab fokussieren und mit den Pfeiltasten wochenweise wandern.</p>';
 
-    h += '<details><summary>Begründung zum letzten Wechsel</summary><div class="details-body">' + reasonHtml(a) + '</div></details>';
-    h += '<details><summary>Tabelle der letzten Wochen</summary><div class="details-body">' + weeksTable(a, Math.max(49, S.c.length - 12), S.c.length - 1) + '</div></details>';
-    h += '<details' + (ui.openWeekly === a ? ' open' : '') + '><summary>Wochenschluss nachtragen</summary><div class="details-body">' + weeklyForm(a) + '</div></details>';
+    h += '<details id="d-reason-' + a + '"><summary>Begründung zum letzten Wechsel</summary><div class="details-body">' + reasonHtml(a) + '</div></details>';
+    h += '<details id="d-weeks-' + a + '"><summary>Tabelle der letzten Wochen</summary><div class="details-body">' + weeksTable(a, Math.max(49, S.c.length - 12), S.c.length - 1) + '</div></details>';
+    h += '<details id="d-weekly-' + a + '"><summary>Wochenschluss von Hand nachtragen</summary><div class="details-body">' + weeklyForm(a) + '</div></details>';
     h += '</div>';
     return h;
   }
@@ -476,12 +612,12 @@
   }
 
   function comexNote() {
-    var c = START.comex, L = M.R.gold.last;
+    var c = (MK && MK.comex) || START.comex, L = M.R.gold.last;
     var differs = c.st !== L.st;
     var current = L.d === c.d;
     return '<div class="note' + (differs && current ? ' warn' : '') + '"><div><b>Gegenprobe COMEX GC=F</b> ' + aref('A-5') + ' zum ' + fdate(c.d) + ': Schluss ' + usd(c.c) + ', SMA50 ' + usd(c.m) + ', Abstand ' + pct(c.dist, 2, true) +
-      ', Regel investiert seit ' + fdate(c.since) + '. ' + (differs ? '<b>Weicht vom LBMA-Stand ab</b> (LBMA: ' + (L.st ? 'investiert' : 'Cash') + '). Maßgeblich ist LBMA.' : 'Stimmt mit LBMA überein.') +
-      (current ? '' : ' Die Gegenprobe ist nicht aktuell, neue COMEX-Daten liefert erst ein Datenjob.') + ' Welches LBMA-Fixing gilt, ist offen ' + qref('O-12') + '.</div></div>';
+      ', Regel ' + (c.st ? 'investiert' : 'Cash') + (c.since ? ' seit ' + fdate(c.since) : '') + '. ' + (differs ? '<b>Weicht vom LBMA-Stand ab</b> (LBMA: ' + (L.st ? 'investiert' : 'Cash') + '). Maßgeblich ist LBMA.' : 'Stimmt mit LBMA überein.') +
+      (current ? '' : ' Die Gegenprobe ist nicht auf dem Stand des letzten LBMA-Wochenschlusses.') + ' Welches LBMA-Fixing gilt, ist offen ' + qref('O-12') + '.</div></div>';
   }
 
   function stateTextAt(a, i) {
@@ -569,7 +705,7 @@
   function weeklyForm(a) {
     var S = M.S[a], n = S.c.length, lastK = S.k[n - 1], nextK = ENG.addDays(lastK, 7), nd = LOGIC.nextCloseDate(a, S.d[n - 1]);
     var list = (state.weekly[a] || []).slice().sort(function (x, y) { return x.k < y.k ? 1 : -1; });
-    return '<p class="small ink2">Trage den Schlusskurs der nächsten abgeschlossenen Woche ein (Woche ab ' + wd(nextK) + ', Wochenschluss normalerweise ' + wd(nd) + '). ' +
+    return '<p class="small ink2">' + (LIVE ? 'Normalerweise liefert der Datenjob jeden Wochenschluss automatisch. Nur falls er ausfällt: ' : '') + 'Trage den Schlusskurs der nächsten abgeschlossenen Woche ein (Woche ab ' + wd(nextK) + ', Wochenschluss normalerweise ' + wd(nd) + '). ' +
       'Quelle: ' + esc(META[a].signal) + '. Die laufende Woche erst nach ihrem Wochenschluss eintragen.' +
       (a === 'ftse' ? ' Bei bereinigten Kursen skaliert Yahoo nach jeder Ausschüttung die ganze Historie neu: Trage dann zusätzlich den Vorwochenschluss auf der neuen Basis ein, die ältere Historie wird mit dem Verhältnis reskaliert (6.2).' : '') + '</p>' +
       '<div class="fields" data-weekly-form="' + a + '">' +
@@ -611,6 +747,10 @@
         stateText: function (i) { return stateTextAt(a, i); }
       });
     });
+    var pe = document.querySelector('[data-perf]');
+    if (pe && PERF) CHART.lines(pe, { d: PERF.d, series: PERF.series, extra: PERF.extra, tip: tip, label: 'Portfolio-Performance', zero: !!PERF.pct,
+      fmt: PERF.pct ? { y: function (v) { return pct(v, 2, true); }, yShort: function (v) { return pct(v, 1, true); }, yAxis: function (v) { return pct(v, Math.abs(v) < 0.1 && v !== 0 ? 1 : 0); }, date: fdate, dateShort: fdm }
+        : { y: function (v) { return eur(v); }, yShort: function (v) { return eur(v, 0); }, yAxis: yAxis, date: fdate, dateShort: fdm } });
   }
 
   /* ================= Ansicht: Depot ================= */
@@ -618,21 +758,22 @@
     var pf = M.pf, today = M.today, h = '';
     h += '<div class="view-head"><div><h2>Depot</h2><p>Bestände nach FIFO, Cash je Baustein ' + aref('A-1') + ' und alle Käufe und Verkäufe. Startdaten laut Trade Republic vom ' + fdate(START.asOf) + ' ' + chip('fakt') + '.</p></div>' +
       '<div class="btn-row"><button class="btn primary" type="button" data-act="tx-new">+ Transaktion erfassen</button></div></div>';
+    h += piesCard();
 
     /* Positionen */
     var rows = '';
     A.forEach(function (a) {
-      var p = pf.pos[a], px = state.prices[a];
-      if (!p.held && !(pf.cash[a] > 0)) return;
+      var p = pf.pos[a], px = M.prices[a];
+      if (!p.held) return;
       var ageOld = px && px.d && ENG.daysBetween(px.d, today) > 7;
       rows += '<tr><td><span class="cell-asset"><span class="key ' + a + '"></span>' + esc(META[a].instr) + '</span><br><span class="small muted">' + esc(META[a].isin || META[a].instrLong) + '</span></td>' +
-        '<td class="r">' + units(a, p.units) + '</td><td class="r">' + eur(p.cost) + '<br><span class="small muted">' + (p.units > 0 ? eur(p.cost / p.units) + ' je ' + (a === 'btc' ? 'BTC' : 'Stück') : '') + '</span></td>' +
+        '<td class="r">' + units(a, p.units) + '</td><td class="r">' + eur(p.cost) + '<br><span class="small muted">' + (p.units > 0 ? eur(ENG.cost(p.lots) / p.units) + ' je ' + (a === 'btc' ? 'BTC' : 'Stück') : '') + '</span></td>' +
         '<td class="r">' + (px && px.px > 0 ? eur(px.px) : '–') + '<br><span class="small ' + (ageOld ? 'neg' : 'muted') + '">' + (px && px.d ? fdate(px.d) + (ageOld ? ' veraltet' : '') : 'kein Kurs') + '</span></td>' +
         '<td class="r">' + eur(p.value) + '</td><td class="r"><span class="' + (p.gain >= 0 ? 'pos' : 'neg') + '">' + eurS(p.gain) + '</span><br><span class="small muted">' + pct(p.gainPct, 2, true) + '</span></td>' +
         '<td class="r">' + pct(p.value / pf.total, 1) + '</td></tr>';
     });
     rows += '<tr><td><span class="cell-asset"><span class="key cash"></span>Cash</span><br><span class="small muted">Zins ' + pct(state.tax.interestRate, 1) + '</span></td><td></td><td></td><td></td><td class="r">' + eur(pf.cash.total) + '</td><td></td><td class="r">' + pct(pf.cash.total / pf.total, 1) + '</td></tr>';
-    h += '<div class="card"><div class="card-head"><h3>Positionen</h3>' + chip('annahme', 'Bewertung A-4', 'Euro-Kurse laut Yahoo; Lang & Schwarz weicht leicht ab. Welche Kurse gelten, ist offen (O-16).') + '</div>' +
+    h += '<div class="card" style="margin-top:16px"><div class="card-head"><h3>Positionen</h3>' + chip('annahme', 'Bewertung A-4', 'Euro-Kurse laut Yahoo; Lang & Schwarz weicht leicht ab. Welche Kurse gelten, ist offen (O-16).') + '</div>' +
       '<div class="table-wrap"><table><thead><tr><th>Position</th><th class="r">Menge</th><th class="r">Einstand</th><th class="r">Kurs</th><th class="r">Wert</th><th class="r">Gewinn</th><th class="r">Gewicht</th></tr></thead><tbody>' + rows + '</tbody>' +
       '<tfoot><tr><td>Summe</td><td></td><td class="r">' + eur(pf.cost) + '</td><td></td><td class="r">' + eur(pf.total) + '</td><td class="r">' + eurS(pf.invested - pf.cost) + '</td><td class="r">100 %</td></tr></tfoot></table></div></div>';
 
@@ -651,25 +792,27 @@
         '<span class="hint">aktuell ' + eur(pf.cash[a]) + '</span></div>';
     }).join('');
     return '<div class="card" id="cash"><div class="card-head"><h3>Cash je Baustein</h3>' + qref('O-5') + '</div>' +
-      '<p class="small ink2">Nach ' + aref('A-1') + ' gehört jedes Cash zu einem Baustein: Ein Verkauf schreibt ihm den Erlös gut, ein Kauf zieht ihn ab. Wie sich das Start-Cash verteilt, ist offen. Solange es nicht zugeordnet ist, verteilt die Rebalancing-Vorschau es nach den Zielgewichten.</p>' +
+      '<p class="small ink2">Nach ' + aref('A-1') + ' gehört jedes Cash zu einem Baustein: Ein Verkauf schreibt ihm den Erlös gut, ein Kauf zieht ihn ab. Das Start-Cash vom 24.09.2026 ist bis zum Ziel verteilt: FTSE 44,71 €, Bitcoin 522,39 €, Gold 2.834,90 €. Nicht zugeordnetes Cash verteilt die Rebalancing-Vorschau nach den Zielgewichten.</p>' +
       '<div class="fields">' + field('cash.total', 'Cash gesamt am Stichtag (€)', 'num') + field('cash.date', 'Stichtag des Cash-Stands', 'date', '', 'Spätere Buchungen verändern das Cash') + '</div>' +
       '<div class="fields" style="margin-top:12px">' + inputs + '</div>' +
       '<div class="kv" style="margin-top:12px"><dt>Nicht zugeordnet</dt><dd>' + eur(pf.cash.frei) + '</dd><dt>Cash gesamt heute</dt><dd>' + eur(pf.cash.total) + '</dd></div>' +
       (pf.cash.frei < -0.005 ? '<div class="note crit" style="margin-top:8px">Die Zuordnung übersteigt das Cash. Bitte Beträge prüfen.</div>' : '') +
       (pf.cashNotes.length ? '<div class="note" style="margin-top:8px">' + pf.cashNotes.map(function (x) { return 'Kauf ' + META[x.a].name + ' am ' + fdate(x.d) + ': ' + eur(x.fromFree) + ' aus nicht zugeordnetem Cash genommen.'; }).join('<br>') + '</div>' : '') +
-      '<div class="btn-row" style="margin-top:10px"><button class="btn small" type="button" data-act="cash-gold20">Gold-Cash = 20 % des Depots (Beispiel O-5)</button><button class="btn small" type="button" data-act="cash-clear">Zuordnung leeren</button></div></div>';
+      '<div class="btn-row" style="margin-top:10px"><button class="btn small" type="button" data-act="cash-fill">Bis zum Ziel auffüllen (O-5)</button><button class="btn small" type="button" data-act="cash-clear">Zuordnung leeren</button></div></div>';
   }
 
   function pricesCard() {
     var today = M.today;
     return '<div class="card"><div class="card-head"><h3>Euro-Kurse für die Bewertung</h3><span>' + aref('A-4') + ' ' + qref('O-16') + '</span></div>' +
-      '<p class="small ink2">Nur für die Anzeige und die Rebalancing-Vorschau, nicht für die Signale. Datum sichtbar, damit veraltete Werte auffallen. Einen automatischen Abruf gibt es in dieser statischen Version nicht (Yahoo erlaubt keinen Abruf aus dem Browser).</p>' +
+      '<p class="small ink2">Nur für Bewertung, Rebalancing und Performance, nicht für die Signale. ' + (LIVE ? 'Der Datenjob holt sie täglich von Yahoo. Ein manueller Kurs gilt nur, wenn er neuer ist als der automatische.' : 'Bis der Datenjob läuft, gelten die Kurse vom 24.09.2026 oder deine Eingaben.') + '</p>' +
       A.map(function (a) {
-        var p = state.prices[a], old = p.d && ENG.daysBetween(p.d, today) > 7;
-        return '<div class="fields" style="margin-top:10px"><div class="field"><label for="px-' + a + '"><span class="key ' + a + '"></span> ' + META[a].instr + ' in € <span class="muted">(' + META[a].eurSym + ')</span></label>' +
-          '<input type="number" step="any" min="0" id="px-' + a + '" data-set="prices.' + a + '.px" data-type="num" value="' + (p.px == null ? '' : p.px) + '" placeholder="kein Kurs"' + (p.px == null ? ' class="empty"' : '') + '></div>' +
-          '<div class="field"><label for="pxd-' + a + '">Kursdatum' + (old ? ' <b class="neg">veraltet</b>' : '') + '</label><input type="date" id="pxd-' + a + '" data-set="prices.' + a + '.d" data-type="date" value="' + (p.d || '') + '"></div>' +
-          '<div class="field"><label for="pxs-' + a + '">Quelle</label><input type="text" id="pxs-' + a + '" data-set="prices.' + a + '.src" data-type="text" value="' + esc(p.src || '') + '"></div></div>';
+        var e = M.prices[a], p = state.prices[a], old = e.d && ENG.daysBetween(e.d, today) > 7;
+        return '<div style="margin-top:12px"><div class="kv"><dt><span class="key ' + a + '"></span> ' + META[a].instr + ' <span class="muted">(' + META[a].eurSym + ')</span></dt><dd>' + (e.px > 0 ? eur(e.px) : '–') + '</dd></div>' +
+          '<div class="small ' + (old ? 'neg' : 'muted') + '">' + (e.px > 0 ? 'vom ' + fdate(e.d) + (old ? ', veraltet' : '') + ' · ' + esc(e.src || '') : 'noch kein Kurs') + '</div>' +
+          '<details id="d-px-' + a + '"><summary class="small">Manuell überschreiben</summary><div class="details-body"><div class="fields">' +
+          '<div class="field"><label for="px-' + a + '">Kurs in €</label><input type="number" step="any" min="0" id="px-' + a + '" data-set="prices.' + a + '.px" data-type="num" value="' + (p.px == null ? '' : p.px) + '" placeholder="kein Kurs"' + (p.px == null ? ' class="empty"' : '') + '></div>' +
+          '<div class="field"><label for="pxd-' + a + '">Kursdatum</label><input type="date" id="pxd-' + a + '" data-set="prices.' + a + '.d" data-type="date" value="' + (p.d || '') + '"></div>' +
+          '<div class="field"><label for="pxs-' + a + '">Quelle</label><input type="text" id="pxs-' + a + '" data-set="prices.' + a + '.src" data-type="text" value="' + esc(p.src || '') + '"></div></div></div></details></div>';
       }).join('') + '</div>';
   }
 
@@ -726,7 +869,7 @@
     if (LOGIC.EXAMPLES[sc]) return { input: clone(LOGIC.EXAMPLES[sc].input), example: LOGIC.EXAMPLES[sc] };
     var tx = state.tx, stOv = {}, pxOv = {};
     A.forEach(function (a) { var v = ui.reb.st[a]; if (v === '1' || v === '0') stOv[a] = +v; if (ok(ui.reb.px[a])) pxOv[a] = ui.reb.px[a]; });
-    var prices = state.prices, cash = state.cash;
+    var prices = M.prices, cash = state.cash;
     if (sc === 'B-12A' || sc === 'B-12B') {
       tx = START.tx.slice(); prices = START.prices; cash = START.cash; stOv = { btc: 1 }; pxOv = {};
       if (sc === 'B-12B') { stOv = {}; tx = tx.concat([{ id: 'b12b', d: '2026-09-28', a: 'btc', type: 'verkauf', units: 0.050467, price: 70700, fee: 0 }]); }
@@ -955,7 +1098,7 @@
   /* ================= Ansicht: Regeln & Fragen ================= */
   function questionHtml(q) {
     var done = q.done();
-    return '<div class="q' + (done ? ' done' : '') + '" id="q-' + q.id + '"><div class="q-head"><div><span class="q-id">' + q.id + '</span>' + esc(q.q) + '</div>' +
+    return '<div class="q' + (done ? ' done' : '') + '"' + (ID_SCOPE === 'regeln' ? ' id="q-' + q.id + '"' : '') + '><div class="q-head"><div><span class="q-id">' + q.id + '</span>' + esc(q.q) + '</div>' +
       (done ? chip('geklaert') : chip('offen')) + '</div><div class="q-meta">' + esc(q.why) + ' · Spätestens: ' + esc(q.due) + '</div>' +
       (q.control ? '<div class="q-control">' + q.control() + '</div>' : '') + '</div>';
   }
@@ -1004,7 +1147,7 @@
        ['Signal Gold', 'LBMA Gold PM, USD', 'LBMA', chip('beschlossen') + ' Fixing ' + qref('O-12')], ['Gegenprobe Gold', 'COMEX GC=F', 'Yahoo Finance', chip('annahme', 'A-5')],
        ['Bewertung', 'VWCE.DE, BTC-EUR, SGBS.MI', 'Yahoo Finance', chip('annahme', 'A-4')], ['Vorabpauschale', 'VWCE-Kurs Jahresbeginn, Basiszins', 'Yahoo, BMF', chip('fakt')]]
         .map(function (r) { return '<tr><td>' + r[0] + '</td><td>' + r[1] + '</td><td>' + r[2] + '</td><td>' + r[3] + '</td></tr>'; }).join('') +
-      '</tbody></table></div><p class="small muted" style="margin-top:8px">Diese statische Version rechnet mit den Testdaten aus Anhang A (130 Wochen bis 18./20.09.2026) plus von dir nachgetragenen Wochenschlüssen. Ein automatischer Datenjob (Yahoo, LBMA) braucht einen Server wegen CORS ' + chip('vorschlag') + '.</p></div>';
+      '</tbody></table></div><p class="small muted" style="margin-top:8px">Der Datenjob (GitHub Actions) holt die Reihen serverseitig, weil Yahoo und LBMA keinen Abruf aus dem Browser erlauben. Er lädt die bereinigte FTSE-Reihe bei jedem Lauf komplett neu (6.2). ' + (LIVE ? 'Letzter Abruf: ' + fdate(MK.updated.slice(0, 10)) + '.' : 'Bis zum ersten Lauf gelten die Testdaten aus Anhang A.') + '</p></div>';
 
     h += '<div class="section-title"><h2>Berichte und Einordnung</h2></div>';
     h += '<div class="grid grid-2"><div class="card"><h3>Berichte im Projekt „Enjoyer OS“</h3><ul style="margin:10px 0 0;padding-left:18px">' +
@@ -1021,37 +1164,56 @@
   }
 
   /* ================= Rendern und Navigation ================= */
-  var VIEWS = { uebersicht: viewOverview, signale: viewSignals, depot: viewDepot, rebalancing: viewRebal, steuern: viewTax, regeln: viewRules };
+  /* Eine durchgehende Seite: Übersicht, Charts, Depot, danach Rebalancing, Steuern, Regeln & Fragen */
+  var SECTIONS = [['uebersicht', viewOverview], ['charts', viewCharts], ['depot', viewDepot], ['rebalancing', viewRebal], ['steuern', viewTax], ['regeln', viewRules]];
+  var OLD_HASH = { signale: 'charts' };
 
-  function render() {
+  function renderSection(id) {
+    var body = document.querySelector('[data-sec="' + id + '"]'), sec = SECTIONS.filter(function (x) { return x[0] === id; })[0];
+    if (!body || !sec) return;
+    var open = {};
+    body.querySelectorAll('details[id]').forEach(function (d) { open[d.id] = d.open; });
+    ID_SCOPE = id;
+    body.innerHTML = sec[1]();
+    ID_SCOPE = '';
+    body.querySelectorAll('details[id]').forEach(function (d) { if (d.id in open) d.open = open[d.id]; });
+    if (id === 'charts') renderCharts();
+    if (id === 'depot') renderDonuts();
+  }
+  function render(only) {
     M = compute();
-    var root = document.getElementById('view-' + ui.tab);
-    if (!root) return;
     var y = window.scrollY;
-    root.innerHTML = VIEWS[ui.tab]();
-    if (ui.tab === 'signale') renderCharts();
+    (only ? [].concat(only) : SECTIONS.map(function (x) { return x[0]; })).forEach(renderSection);
     var oc = openCount(), el = document.getElementById('open-count');
     el.textContent = oc ? oc + ' offen' : '';
     el.hidden = !oc;
     window.scrollTo(0, y);
   }
 
-  function setTab(t, target) {
-    if (!VIEWS[t]) t = 'uebersicht';
-    ui.tab = t; saveUi();
-    document.querySelectorAll('.view').forEach(function (v) {
-      var on = v.id === 'view-' + t;
-      v.classList.toggle('active', on);
-      if (!on) v.innerHTML = ''; /* keine doppelten IDs in verborgenen Ansichten */
-    });
-    document.querySelectorAll('.tabs a').forEach(function (a) { if (a.getAttribute('data-tab') === t) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); });
-    render();
-    if (target) {
-      var el = document.getElementById(target);
-      if (el) { el.scrollIntoView({ behavior: 'smooth', block: 'start' }); if (el.tagName === 'DETAILS') el.open = true; }
-    } else window.scrollTo(0, 0);
+  function goTo(id, instant) {
+    var el = document.getElementById(OLD_HASH[id] || id);
+    if (!el) return;
+    if (el.tagName === 'DETAILS') el.open = true;
+    else if (el.closest('details')) el.closest('details').open = true;
+    el.scrollIntoView({ behavior: instant ? 'auto' : 'smooth', block: 'start' });
   }
-  function route() { var h = (location.hash || '#uebersicht').slice(1); setTab(h); }
+
+  /* Navigation markiert den Abschnitt, der gerade im Blick ist */
+  var nav = document.querySelector('.tabs'), navLinks = [].slice.call(document.querySelectorAll('.tabs a'));
+  function setCurrent(id) {
+    navLinks.forEach(function (a) {
+      if (a.getAttribute('href') === '#' + id) {
+        a.setAttribute('aria-current', 'true');
+        if (a.offsetLeft < nav.scrollLeft || a.offsetLeft + a.offsetWidth > nav.scrollLeft + nav.clientWidth) nav.scrollLeft = a.offsetLeft - 16;
+      } else a.removeAttribute('aria-current');
+    });
+  }
+  if ('IntersectionObserver' in window) {
+    var io = new IntersectionObserver(function (entries) {
+      entries.forEach(function (en) { if (en.isIntersecting) setCurrent(en.target.id); });
+    }, { rootMargin: '-35% 0px -60% 0px' });
+    SECTIONS.forEach(function (x) { var el = document.getElementById(x[0]); if (el) io.observe(el); });
+  }
 
   function toast(msg) {
     var t = document.createElement('div'); t.className = 'toast'; t.setAttribute('role', 'status'); t.textContent = msg;
@@ -1068,14 +1230,14 @@
       if (/^prices\.\w+\.px$/.test(path) && ok(v)) setPath(state, path.replace('.px', '.d'), M.today); /* neuer Kurs = Stand heute */
       setPath(state, path, v); commit(); return;
     }
-    if (el.hasAttribute('data-reb-st')) { ui.reb.st[el.getAttribute('data-reb-st')] = el.value; render(); return; }
-    if (el.hasAttribute('data-reb-px')) { var x = parseFloat(el.value); ui.reb.px[el.getAttribute('data-reb-px')] = isFinite(x) && x > 0 ? x : null; render(); return; }
+    if (el.hasAttribute('data-reb-st')) { ui.reb.st[el.getAttribute('data-reb-st')] = el.value; render('rebalancing'); return; }
+    if (el.hasAttribute('data-reb-px')) { var x = parseFloat(el.value); ui.reb.px[el.getAttribute('data-reb-px')] = isFinite(x) && x > 0 ? x : null; render('rebalancing'); return; }
     if (el.hasAttribute('data-sim')) {
       var k = el.getAttribute('data-sim');
       if (k === 'a') { ui.sim.a = el.value; ui.sim.amount = null; ui.sim.px = null; }
       else if (k === 'date') ui.sim.date = el.value || null;
       else { var n = parseFloat(el.value); ui.sim[k] = isFinite(n) && n >= 0 ? n : null; }
-      render(); return;
+      render('steuern'); return;
     }
     if (el.id === 'import-file' && el.files && el.files[0]) {
       var fr = new FileReader();
@@ -1083,7 +1245,7 @@
         try {
           var obj = JSON.parse(fr.result);
           if (!obj || !Array.isArray(obj.tx) || !obj.cash || !obj.tax) throw new Error('Format');
-          state = sanitize(fillMissing(defaults(), obj)); commit(); toast('Daten importiert.');
+          state = migrate(sanitize(fillMissing(defaults(), obj))); commit(); toast('Daten importiert.');
         } catch (err) { toast('Import fehlgeschlagen: keine gültige Export-Datei.'); }
       };
       fr.readAsText(el.files[0]);
@@ -1102,22 +1264,17 @@
   });
 
   document.addEventListener('click', function (e) {
-    var t = e.target.closest('[data-range],[data-scen],[data-act],[data-goto],[data-goto-q],[data-goto-a]');
+    var t = e.target.closest('[data-range],[data-perf-range],[data-perf-mode],[data-scen],[data-act],[data-goto],[data-goto-q],[data-goto-a]');
     if (!t) return;
-    if (t.hasAttribute('data-range')) { ui.range = t.getAttribute('data-range'); saveUi(); render(); return; }
-    if (t.hasAttribute('data-scen')) { ui.reb.scen = t.getAttribute('data-scen'); render(); return; }
+    if (t.hasAttribute('data-range')) { ui.range = t.getAttribute('data-range'); saveUi(); render('charts'); return; }
+    if (t.hasAttribute('data-perf-range')) { ui.perfRange = t.getAttribute('data-perf-range'); saveUi(); render('charts'); return; }
+    if (t.hasAttribute('data-perf-mode')) { ui.perfMode = t.getAttribute('data-perf-mode'); saveUi(); render('charts'); return; }
+    if (t.hasAttribute('data-scen')) { ui.reb.scen = t.getAttribute('data-scen'); render('rebalancing'); return; }
     if (t.hasAttribute('data-goto-q') || t.hasAttribute('data-goto-a')) {
       e.preventDefault();
-      var id = t.hasAttribute('data-goto-q') ? 'q-' + t.getAttribute('data-goto-q') : 'a-' + t.getAttribute('data-goto-a');
-      if (location.hash !== '#regeln') history.pushState(null, '', '#regeln');
-      setTab('regeln', id); return;
+      goTo(t.hasAttribute('data-goto-q') ? 'q-' + t.getAttribute('data-goto-q') : 'a-' + t.getAttribute('data-goto-a')); return;
     }
-    if (t.hasAttribute('data-goto')) {
-      e.preventDefault();
-      var tab = (t.getAttribute('href') || '#').slice(1);
-      if (location.hash !== '#' + tab) history.pushState(null, '', '#' + tab);
-      setTab(tab, t.getAttribute('data-goto')); return;
-    }
+    if (t.hasAttribute('data-goto')) { e.preventDefault(); goTo(t.getAttribute('data-goto')); return; }
     var act = t.getAttribute('data-act');
     if (act === 'tx-new') openTx(null);
     else if (act === 'tx-edit') openTx(t.getAttribute('data-id'));
@@ -1129,9 +1286,15 @@
     } else if (act === 'add-weekly') addWeekly(t.getAttribute('data-a'));
     else if (act === 'del-weekly') {
       var a = t.getAttribute('data-a'), k = t.getAttribute('data-k');
-      state.weekly[a] = state.weekly[a].filter(function (w) { return w.k !== k; }); ui.openWeekly = a; commit();
-    } else if (act === 'cash-gold20') {
-      state.cash.gold = LOGIC.round(M.pf.total * RS.weights.gold, 2); commit(); toast('Gold-Cash auf 20 % des Depots gesetzt. Der Rest bleibt offen.');
+      state.weekly[a] = state.weekly[a].filter(function (w) { return w.k !== k; }); commit();
+    } else if (act === 'cash-fill') {
+      /* O-5 wie am 24.09.2026 entschieden: jeder Baustein bis zu seinem Ziel, soweit das Cash reicht */
+      var left = M.pf.cash.total;
+      A.forEach(function (x) {
+        var need = Math.max(0, LOGIC.round(M.pf.total * RS.weights[x] - (ok(M.pf.pos[x].value) ? M.pf.pos[x].value : 0), 2));
+        state.cash[x] = LOGIC.round(Math.min(need, Math.max(0, left)), 2); left -= state.cash[x];
+      });
+      commit(); toast('Cash bis zum Ziel je Baustein verteilt.');
     } else if (act === 'cash-clear') { A.forEach(function (x) { state.cash[x] = null; }); commit(); }
     else if (act === 'export') exportData();
     else if (act === 'reset') { if (confirm('Alle Eingaben verwerfen und die Startdaten vom 24.09.2026 wiederherstellen?')) { state = defaults(); commit(); toast('Startdaten wiederhergestellt.'); } }
@@ -1150,7 +1313,7 @@
     var closeD = a === 'btc' ? ENG.addDays(k, 6) : d;
     if (Date.now() < closeMoment(a, closeD)) { toast('Diese Woche ist noch nicht abgeschlossen. Nur abgeschlossene Wochen zählen.'); return; }
     state.weekly[a] = (state.weekly[a] || []).filter(function (w) { return w.k !== k; }).concat([{ k: k, d: d, c: c, p: p > 0 ? p : undefined, src: 'manuell', t: new Date().toISOString() }]);
-    ui.hypo[a] = null; ui.openWeekly = a; commit();
+    ui.hypo[a] = null; commit();
     var r = M.R[a];
     toast(r.last.changed ? (r.last.st === 1 ? 'KAUFSIGNAL ' : 'VERKAUFSSIGNAL ') + META[a].name + ': Handel am Montag, ' + fdate(LOGIC.tradeDate(r.last.d)) : 'Wochenschluss übernommen, kein Signalwechsel.');
   }
@@ -1199,12 +1362,19 @@
     var cur = document.documentElement.getAttribute('data-theme') || (window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
     var next = cur === 'dark' ? 'light' : 'dark';
     applyTheme(next); try { localStorage.setItem(THEMEKEY, next); } catch (e) { /* ignorieren */ }
-    if (ui.tab === 'signale') renderCharts();
+    renderCharts(); renderDonuts();
   });
 
-  var rt;
-  window.addEventListener('resize', function () { clearTimeout(rt); rt = setTimeout(function () { if (ui.tab === 'signale') renderCharts(); }, 150); });
-  window.addEventListener('hashchange', route);
-  setInterval(function () { if (ui.tab === 'uebersicht' && !document.querySelector('input:focus, select:focus')) render(); }, 60000);
-  route();
+  var rt, lastW = window.innerWidth;
+  window.addEventListener('resize', function () {
+    if (window.innerWidth === lastW) return; /* mobile Adressleiste ändert nur die Höhe */
+    lastW = window.innerWidth; clearTimeout(rt); rt = setTimeout(function () { renderCharts(); renderDonuts(); }, 150);
+  });
+  window.addEventListener('hashchange', function () { var h = location.hash.slice(1); if (OLD_HASH[h]) goTo(h); });
+  setInterval(function () {
+    var ov = document.getElementById('uebersicht');
+    if (!ov.contains(document.activeElement)) render('uebersicht'); /* Countdowns aktualisieren */
+  }, 60000);
+  render();
+  if (location.hash.length > 1) goTo(location.hash.slice(1), true);
 })();

@@ -7,7 +7,8 @@
     "test": "node --test test/*.test.js",
     "build": "node scripts/build.mjs",
     "extract": "node scripts/extract-data.mjs",
-    "start": "node scripts/serve.mjs"
+    "start": "node scripts/serve.mjs",
+    "update": "node scripts/update-data.mjs"
   },
   "engines": {
     "node": ">=18"
