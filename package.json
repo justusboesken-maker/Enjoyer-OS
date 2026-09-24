@@ -1,0 +1,15 @@
+{
+  "name": "regel-depot-50-30-20",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Persönliche Portfolio-Web-App für das Regel-Depot 50/30/20 (FTSE All-World, Bitcoin, Gold)",
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "build": "node scripts/build.mjs",
+    "extract": "node scripts/extract-data.mjs",
+    "start": "node scripts/serve.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
