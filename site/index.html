@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Regel-Depot 50/30/20</title>
+  <meta name="description" content="Persönliche Portfolio-App: Depotübersicht, nachvollziehbare Trendsignale (SMA50) und Rebalancing-Vorschau für FTSE All-World, Bitcoin und Gold.">
+  <meta name="robots" content="noindex">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230b0b0b'/%3E%3Crect x='6' y='8' width='8' height='16' rx='2' fill='%232a78d6'/%3E%3Crect x='15' y='13' width='5' height='11' rx='2' fill='%23eb6834'/%3E%3Crect x='21' y='17' width='5' height='7' rx='2' fill='%231baf7a'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <div class="brand">
+        <h1>Regel-Depot 50/30/20</h1>
+        <span class="sub">FTSE All-World · Bitcoin · Gold · Trade Republic</span>
+      </div>
+      <div class="top-actions">
+        <button class="btn icon" id="theme-toggle" type="button" title="Hell/Dunkel umschalten" aria-label="Hell/Dunkel umschalten">◐</button>
+      </div>
+      <nav class="tabs" aria-label="Bereiche">
+        <a href="#uebersicht" data-tab="uebersicht">Übersicht</a>
+        <a href="#signale" data-tab="signale">Signale</a>
+        <a href="#depot" data-tab="depot">Depot</a>
+        <a href="#rebalancing" data-tab="rebalancing">Rebalancing</a>
+        <a href="#steuern" data-tab="steuern">Steuern</a>
+        <a href="#regeln" data-tab="regeln">Regeln &amp; Fragen <span class="count" id="open-count"></span></a>
+      </nav>
+    </div>
+  </header>
+
+  <main id="app">
+    <section class="view" id="view-uebersicht" aria-label="Übersicht"></section>
+    <section class="view" id="view-signale" aria-label="Signale"></section>
+    <section class="view" id="view-depot" aria-label="Depot"></section>
+    <section class="view" id="view-rebalancing" aria-label="Rebalancing"></section>
+    <section class="view" id="view-steuern" aria-label="Steuern"></section>
+    <section class="view" id="view-regeln" aria-label="Regeln und offene Fragen"></section>
+    <noscript><div class="card">Diese App braucht JavaScript.</div></noscript>
+  </main>
+
+  <footer>
+    <p><strong>Keine Anlage- und keine Steuerberatung.</strong> Alle Steuerzahlen sind Schätzungen nach Rechtsstand September 2026.
+      Die App führt keine Orders aus und verbindet sich nicht mit Trade Republic. Deine Eingaben bleiben lokal in diesem Browser; sichere sie über „Depot → Daten exportieren“.
+      Fachliche Grundlage: <code>docs/uebergabe.md</code> (Stand 24.09.2026).</p>
+  </footer>
+
+  <div class="tooltip" id="tooltip" hidden></div>
+
+  <dialog id="tx-dialog">
+    <form method="dialog" id="tx-form">
+      <h3 id="tx-title">Transaktion erfassen</h3>
+      <div class="fields">
+        <div class="field"><label for="tx-d">Datum</label><input type="date" id="tx-d" required></div>
+        <div class="field"><label for="tx-a">Baustein</label>
+          <select id="tx-a"><option value="ftse">FTSE All-World (VWCE)</option><option value="btc">Bitcoin</option><option value="gold">Gold-ETC</option></select></div>
+        <div class="field"><label for="tx-type">Art</label>
+          <select id="tx-type"><option value="kauf">Kauf</option><option value="verkauf">Verkauf</option></select></div>
+      </div>
+      <div class="fields">
+        <div class="field"><label for="tx-units">Menge (Stück bzw. BTC)</label><input type="number" id="tx-units" step="any" min="0" required></div>
+        <div class="field"><label for="tx-price">Kurs je Stück in EUR</label><input type="number" id="tx-price" step="any" min="0" required></div>
+        <div class="field"><label for="tx-fee">Gebühr in EUR</label><input type="number" id="tx-fee" step="any" min="0" value="1"></div>
+      </div>
+      <div class="field"><label for="tx-note">Notiz</label><input type="text" id="tx-note" maxlength="300"></div>
+      <div class="fields">
+        <div class="field"><label for="tx-src">Herkunft</label>
+          <select id="tx-src"><option value="manuell">manuell</option><option value="screenshot">Screenshot / PDF</option></select></div>
+        <label class="check"><input type="checkbox" id="tx-est"> geschätzt</label>
+      </div>
+      <p class="small muted" id="tx-hint"></p>
+      <div class="btn-row" style="justify-content:flex-end">
+        <button class="btn" value="cancel" type="submit" formnovalidate>Abbrechen</button>
+        <button class="btn primary" value="save" type="submit" id="tx-save">Speichern</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script src="js/engine.js"></script>
+  <script src="js/logic.js"></script>
+  <script src="js/data.js"></script>
+  <script src="js/start.js"></script>
+  <script src="js/charts.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
