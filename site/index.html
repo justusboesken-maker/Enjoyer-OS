@@ -19,30 +19,30 @@
       <div class="top-actions">
         <button class="btn icon" id="theme-toggle" type="button" title="Hell/Dunkel umschalten" aria-label="Hell/Dunkel umschalten">◐</button>
       </div>
-      <nav class="tabs" aria-label="Bereiche">
-        <a href="#uebersicht" data-tab="uebersicht">Übersicht</a>
-        <a href="#signale" data-tab="signale">Signale</a>
-        <a href="#depot" data-tab="depot">Depot</a>
-        <a href="#rebalancing" data-tab="rebalancing">Rebalancing</a>
-        <a href="#steuern" data-tab="steuern">Steuern</a>
-        <a href="#regeln" data-tab="regeln">Regeln &amp; Fragen <span class="count" id="open-count"></span></a>
+      <nav class="tabs" aria-label="Abschnitte">
+        <a href="#uebersicht" aria-current="true">Übersicht</a>
+        <a href="#charts">Charts</a>
+        <a href="#depot">Depot</a>
+        <a href="#rebalancing">Rebalancing</a>
+        <a href="#steuern">Steuern</a>
+        <a href="#regeln">Regeln &amp; Fragen <span class="count" id="open-count"></span></a>
       </nav>
     </div>
   </header>
 
   <main id="app">
-    <section class="view" id="view-uebersicht" aria-label="Übersicht"></section>
-    <section class="view" id="view-signale" aria-label="Signale"></section>
-    <section class="view" id="view-depot" aria-label="Depot"></section>
-    <section class="view" id="view-rebalancing" aria-label="Rebalancing"></section>
-    <section class="view" id="view-steuern" aria-label="Steuern"></section>
-    <section class="view" id="view-regeln" aria-label="Regeln und offene Fragen"></section>
+    <section class="page-section" id="uebersicht" aria-label="Übersicht"><div data-sec="uebersicht"></div></section>
+    <section class="page-section" id="charts" aria-label="Charts"><div data-sec="charts"></div></section>
+    <section class="page-section" id="depot" aria-label="Depot"><div data-sec="depot"></div></section>
+    <section class="page-section" id="rebalancing" aria-label="Rebalancing"><div data-sec="rebalancing"></div></section>
+    <section class="page-section" id="steuern" aria-label="Steuern"><div data-sec="steuern"></div></section>
+    <section class="page-section" id="regeln" aria-label="Regeln und offene Fragen"><div data-sec="regeln"></div></section>
     <noscript><div class="card">Diese App braucht JavaScript.</div></noscript>
   </main>
 
   <footer>
     <p><strong>Keine Anlage- und keine Steuerberatung.</strong> Alle Steuerzahlen sind Schätzungen nach Rechtsstand September 2026.
-      Die App führt keine Orders aus und verbindet sich nicht mit Trade Republic. Deine Eingaben bleiben lokal in diesem Browser; sichere sie über „Depot → Daten exportieren“.
+      Die App führt keine Orders aus und verbindet sich nicht mit Trade Republic. Kursdaten: Yahoo Finance und LBMA über einen automatischen Datenjob. Deine Depot-Eingaben bleiben lokal in diesem Browser; sichere sie über „Depot → Daten exportieren“.
       Fachliche Grundlage: <code>docs/uebergabe.md</code> (Stand 24.09.2026).</p>
   </footer>
 
@@ -80,6 +80,7 @@
   <script src="js/engine.js"></script>
   <script src="js/logic.js"></script>
   <script src="js/data.js"></script>
+  <script src="data/market.js"></script>
   <script src="js/start.js"></script>
   <script src="js/charts.js"></script>
   <script src="js/app.js"></script>

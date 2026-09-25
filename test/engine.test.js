@@ -253,15 +253,20 @@ function myDepot(extraTx, stOverride) {
   return L.rebalanceBoth(L.rebalanceInput(pf, st, { date: '2026-12-30', stOverride }, cfg, ty));
 }
 
-test('B-12 A: Kaufsignal Bitcoin am 27.09. (Cash nicht zugeordnet, O-5)', () => {
+test('B-12 A: Kaufsignal Bitcoin am 27.09. (Cash bis zum Ziel zugeordnet, O-5)', () => {
   for (const r of Object.values(myDepot([], { btc: 1 }))) {
     assert.equal(r2(r.rows.ftse.buy), 44.71); assert.equal(r2(r.rows.btc.buy), 522.39);
     assert.equal(r2(r.rows.gold.after), 2834.90); assert.equal(r2(r.tax), 0);
   }
 });
 
-test('B-12 A: dasselbe Ergebnis, wenn das Cash dem Gold-Baustein zugeordnet ist', () => {
-  const pf = L.portfolio(START.tx, START.prices, Object.assign({}, START.cash, { gold: 3402 }));
+test('B-12 A: dasselbe Ergebnis mit Cash nur beim Gold (wie im Dokument) oder ganz ohne Zuordnung', () => {
+  const unassigned = L.portfolio(START.tx, START.prices, Object.assign({}, START.cash, { ftse: null, btc: null, gold: null }));
+  assert.equal(unassigned.cash.frei, 3402);
+  const cfgU = L.taxCfg(START.tax, START.settings, 3402, '2026-09-24');
+  const ru = ENG.rebalance(Object.assign(L.rebalanceInput(unassigned, { ftse: 1, btc: 1, gold: 0 }, { date: '2026-12-30' }, cfgU, ENG.taxYear(cfgU, [], 2026)), { variant: 'frei' }));
+  assert.equal(r2(ru.rows.ftse.buy), 44.71); assert.equal(r2(ru.rows.btc.buy), 522.39); assert.equal(r2(ru.rows.gold.after), 2834.90);
+  const pf = L.portfolio(START.tx, START.prices, Object.assign({}, START.cash, { ftse: 0, btc: 0, gold: 3402 }));
   assert.equal(pf.cash.frei, 0);
   const cfg = L.taxCfg(START.tax, START.settings, pf.cash.total, '2026-09-24');
   const r = ENG.rebalance(Object.assign(L.rebalanceInput(pf, { ftse: 1, btc: 1, gold: 0 }, { date: '2026-12-30' }, cfg, ENG.taxYear(cfg, [], 2026)), { variant: 'frei' }));
@@ -274,6 +279,33 @@ test('B-12 B: Bitcoin am 28.09. zu 70.700 € nach Regel verkauft', () => {
     assert.equal(r2(r.rows.ftse.sell), 36.25); assert.equal(r2(r.rows.btc.after), 4203.76);
     assert.equal(r2(r.rows.gold.after), 2802.51); assert.equal(r2(r.tax), 0); assert.equal(r2(r.s23After), 799.19);
   }
+});
+
+test('O-5: Ist-Zustand je Baustein mit der Cash-Zuordnung vom 24.09.2026 = genau 50/30/20', () => {
+  const pf = L.portfolio(START.tx, START.prices, START.cash);
+  assert.equal(r2(pf.cash.frei), 0);
+  assert.deepEqual(L.ASSETS.map((a) => r2(pf.pos[a].value + pf.cash[a])), [7087.24, 4252.34, 2834.90]);
+});
+
+test('Performance: Positionen ab dem ersten Kauf, Depotwert inkl. Cash ab dem Cash-Stichtag', () => {
+  const eur = { ftse: { d: ['2026-09-17', '2026-09-18', '2026-09-24', '2026-09-25'], c: [160, 167.92, 168.92, 170] },
+    btc: { d: ['2026-06-29', '2026-06-30', '2026-09-24', '2026-09-26'], c: [50000, 55000, 73908.69, 75000] } };
+  const p = L.performance(START.tx, eur, START.cash, '2026-09-26');
+  assert.deepEqual(p.d, ['2026-06-30', '2026-09-17', '2026-09-18', '2026-09-24', '2026-09-25', '2026-09-26']);
+  assert.equal(r2(p.value[0]), r2(0.050467 * 55000));
+  assert.equal(r2(p.cost[1]), 2776.27);
+  assert.equal(r2(p.value[3]), 14174.48 - 3402);
+  assert.deepEqual(p.total.slice(0, 3), [null, null, null]);
+  assert.equal(r2(p.total[3]), 14174.48);
+  assert.equal(r2(p.total[5]), r2(41.691483 * 170 + 0.050467 * 75000 + 3402));
+  assert.equal(L.performance([], eur, START.cash, '2026-09-26'), null);
+  /* Zeitgewichtete Rendite: Käufe sind Zuflüsse, kein Gewinn. Tag 1: Kauf zu 55.011,54 €, Schluss 55.000 € */
+  const ub = 0.050467, uf = 41.691483;
+  const g0 = (ub * 55000) / (ub * 55011.54);
+  assert.equal(L.round(p.twr[0], 10), L.round(g0 - 1, 10));
+  const v18 = uf * 167.92 + ub * 55000, v26 = uf * 170 + ub * 75000;
+  assert.equal(L.round(p.twr[2], 10), L.round(g0 - 1, 10), 'VWCE-Kauf zum Schlusskurs ändert die Rendite nicht');
+  assert.equal(L.round(p.twr[5], 10), L.round(g0 * v26 / v18 - 1, 10));
 });
 
 test('A-1: Verkauf schreibt dem Baustein Cash gut, Kauf zieht ab (Rest aus freiem Cash)', () => {

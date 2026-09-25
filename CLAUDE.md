@@ -11,7 +11,7 @@ Fachliche Regeln stehen in `docs/uebergabe.md`. Abschnitt 2 ist verbindlich, Abs
 
 ## Aufbau
 
-Statische Web-App ohne Build-Schritt und ohne Abhängigkeiten. `site/index.html` funktioniert direkt per Doppelklick (klassische Skripte, keine ES-Module).
+Statische Web-App ohne Build-Schritt und ohne Abhängigkeiten, eine durchgehende Seite (Übersicht, Charts, Depot, Rebalancing, Steuern, Regeln & Fragen). `site/index.html` funktioniert direkt per Doppelklick (klassische Skripte, keine ES-Module). Kursdaten holt ein Datenjob (GitHub Actions) von Yahoo und LBMA; er meldet neue Signale per Telegram und veröffentlicht die Seite auf GitHub Pages.
 
 | Datei | Inhalt |
 |---|---|
@@ -21,7 +21,12 @@ Statische Web-App ohne Build-Schritt und ohne Abhängigkeiten. `site/index.html`
 | `site/js/start.js` | Startdepot und Steuerlage vom 24.09.2026 (Abschnitt 5) |
 | `site/js/charts.js` | SVG-Chart je Baustein (Schluss, SMA50, Band, Zustandsstreifen, Abstand) |
 | `site/js/app.js` | Oberfläche, Zustand (localStorage), Ereignisse |
-| `test/engine.test.js` | Abnahmetests B-1 bis B-12 und 7.1 |
+| `site/data/market.js` | Kursdaten des Datenjobs (`MARKET`), automatisch erzeugt – nicht von Hand ändern. Fehlt sie, gelten die Testdaten |
+| `scripts/market.cjs` | Reine Funktionen des Datenjobs: Yahoo/LBMA parsen, Wochenpunkte, neue Signale, Telegram-Text |
+| `scripts/update-data.mjs` | Datenjob: abrufen, rechnen, `market.js` schreiben, Telegram senden (Secrets `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`) |
+| `.github/workflows/daten.yml` | Zeitplan Fr 17:15 / Mo 00:20 / täglich 21:40 UTC, Tests, Datenjob, Commit, Pages |
+| `test/engine.test.js` | Abnahmetests B-1 bis B-12, 7.1, Performance |
+| `test/market.test.js` | Datenjob mit nachgebauten Yahoo-/LBMA-Antworten |
 
 ## Befehle
 
@@ -29,6 +34,7 @@ Statische Web-App ohne Build-Schritt und ohne Abhängigkeiten. `site/index.html`
 - `npm start` – lokaler Server auf http://localhost:8080
 - `npm run build` – eine eigenständige Datei `dist/regel-depot.html`
 - `npm run extract` – `site/js/data.js` neu aus `docs/uebergabe.md` erzeugen
+- `npm run update` – Datenjob lokal (braucht Netz zu Yahoo und LBMA; `--seed` schreibt die Startdatei aus Anhang A)
 
 ## Konventionen
 
@@ -37,3 +43,5 @@ Statische Web-App ohne Build-Schritt und ohne Abhängigkeiten. `site/index.html`
 - Gerundet wird mit `LOGIC.round` (kaufmännisch, robust gegen Binärfehler), nie mit `toFixed`.
 - Dynamische Texte in HTML-Strings immer mit `esc()` einsetzen.
 - Farben nur über CSS-Tokens in `site/css/styles.css`; Baustein-Farben: FTSE blau, Bitcoin orange, Gold aqua (validierte Palette).
+- Entscheidungen des Nutzers (z. B. O-5, O-11 am 24.09.2026) stehen in `site/js/start.js`; ältere Browser-Speicherstände hebt `migrate()` in `app.js` an.
+- Der Datenjob zählt nur abgeschlossene Wochen und meldet jedes Signal genau einmal (`events` in `market.js`). Keine Tokens loggen.

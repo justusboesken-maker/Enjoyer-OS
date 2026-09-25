@@ -8,42 +8,94 @@ Grundlage ist das Übergabedokument [`docs/uebergabe.md`](docs/uebergabe.md) (St
 
 ## Starten
 
-Ohne Installation: `site/index.html` im Browser öffnen.
+Ohne Installation: `site/index.html` im Browser öffnen. Online (nach der Einrichtung unten): **https://justusboesken-maker.github.io/Enjoyer-OS/**
 
-Oder mit Node.js (ab Version 18):
+Mit Node.js (ab Version 18):
 
 ```bash
 npm start          # http://localhost:8080
-npm test           # Abnahmetests B-1 bis B-12
+npm test           # Abnahmetests B-1 bis B-12, Datenjob, Performance
 npm run build      # eine eigenständige Datei: dist/regel-depot.html
+npm run update     # Kursdaten jetzt abrufen (braucht Zugang zu Yahoo und LBMA)
 ```
 
-## Was die Website kann
+## Aufbau der Seite
 
-| Bereich | Inhalt |
+Eine durchgehende Seite. Die Leiste oben springt zu den Abschnitten:
+
+| Abschnitt | Inhalt |
 |---|---|
-| **Übersicht** | Depotwert, Einstand, Gewinn, Cash. „Was ist zu tun?“ je Baustein nach der Handlungsmatrix (Regel × Bestand), bei Bitcoin beide Wege für den Wochenschluss am 27.09. Ist gegen Ziel 50/30/20, Termine mit Countdown, dringende offene Fragen |
-| **Signale** | Je Baustein: Zustand, letzter Wochenschluss, SMA50, Abstand, Zähler, letzter Wechsel, Schwelle für die nächste Woche (Formeln aus 8.2) und fehlende Schlüsse. Interaktiver Chart (1 J/3 J/5 J/Max, Hover und Tastatur), Was-wäre-wenn-Rechner für den nächsten Wochenschluss, Begründung zum Aufklappen, Wochentabelle, Wochenschluss nachtragen, Gegenprobe Gold (COMEX), Verlauf aller Signale |
-| **Depot** | Positionen, Cash je Baustein (A-1), Euro-Kurse mit Datum, Kauflose nach FIFO mit steuerlicher Einordnung, Transaktionen erfassen, bearbeiten und löschen, Export/Import als JSON |
-| **Rebalancing** | Varianten „steuerfrei“ und „voll auf 50/30/20“ nebeneinander, mit Steuer (§ 20/§ 23), Orders, Gewichten danach, Pauschbetrag und Freigrenze. Stichtag, Regelstand und Kurse frei wählbar. Die Rechenbeispiele B-9 bis B-12 lassen sich laden und werden live gegen die Erwartung geprüft. Hinweis „Pauschbetrag nutzen“ |
-| **Steuern** | Pauschbetrag und Freigrenze als Balken, Verkaufssimulator (FIFO, Haltefrist, Klippe der Freigrenze), Haltefristen, Vorabpauschale, Krypto-Entwurf als Szenario |
-| **Regeln & Fragen** | Status-Legende, alle 17 offenen Fragen mit Eingabefeldern und Fortschritt, Signalregeln und Zustandsautomaten, Annahmen A-1 bis A-12, Datenquellen, Berichte |
+| **Übersicht** | Depotwert, Einstand, Gewinn, Cash. „Was ist zu tun?“ je Baustein nach der Handlungsmatrix (Regel × Bestand). Termine mit Countdown, Status von Kursdaten und Telegram, dringende offene Fragen |
+| **Charts** | **Portfolio-Performance** in drei Ansichten: Depot gesamt, Positionen gegen Einstand, zeitgewichtete Rendite. Darunter die **Signalcharts** je Baustein: SMA50, beim Bitcoin das 3-%-Band, Zustandsstreifen, Signalmarker, Abstand zum SMA50. Dazu Schwelle für die nächste Woche, Was-wäre-wenn-Rechner, Begründung, Wochentabelle und Signalverlauf |
+| **Depot** | **Ist und Ziel als Kreisdiagramme** nebeneinander, Ist getrennt nach investiert und Cash je Baustein. Positionen, Cash je Baustein, Euro-Kurse, Kauflose nach FIFO, Transaktionen, Export/Import |
+| **Rebalancing** | Varianten „steuerfrei“ und „voll auf 50/30/20“ mit Steuer, Orders und Gewichten. Rechenbeispiele B-9 bis B-12 mit Live-Abgleich |
+| **Steuern** | Pauschbetrag, Freigrenze, Verkaufssimulator, Haltefristen, Vorabpauschale, Krypto-Entwurf |
+| **Regeln & Fragen** | Statuskennzeichen, offene Fragen mit Eingabefeldern, Regeln, Annahmen, Datenquellen, Berichte |
 
-Die Statuskennzeichen aus dem Dokument (BESCHLOSSEN, ANNAHME, OFFEN, FAKT, VORSCHLAG) stehen überall dort, wo ein Wert herkommt. Offene Schwellen (Vorwarnung, Grenzfall, Mindestorder, Puffer) haben keinen Vorgabewert. Die zugehörigen Funktionen greifen erst, wenn du einen Wert einträgst.
+Die Statuskennzeichen aus dem Dokument (BESCHLOSSEN, ANNAHME, OFFEN, FAKT, VORSCHLAG) stehen überall dort, wo ein Wert herkommt. Offene Schwellen (Vorwarnung, Grenzfall, Mindestorder, Puffer) haben keinen Vorgabewert.
 
-## Daten
+Entscheidungen vom 24.09.2026:
+- **O-5:** Das Cash ist bis zum Ziel verteilt: FTSE 44,71 €, Bitcoin 522,39 €, Gold 2.834,90 €.
+- **O-11:** Benachrichtigung per Telegram, Hosting auf GitHub Pages, öffentlich ohne Login.
 
-- **Marktdaten:** die 130 Wochenschlüsse je Reihe aus Anhang A (bis 18./20.09.2026). Neue Wochenschlüsse trägst du unter *Signale → Wochenschluss nachtragen* ein. Beim bereinigten FTSE wird die Historie dabei wie in 6.2 reskaliert.
-- **Depot:** die Startdaten aus Abschnitt 5, danach deine Eingaben. Sie liegen nur im `localStorage` dieses Browsers. Sichere sie über *Depot → Daten exportieren*.
+## Daten und Benachrichtigungen
+
+Der Workflow [`.github/workflows/daten.yml`](.github/workflows/daten.yml) läuft auf GitHub:
+
+| Zeit (UTC) | Zweck |
+|---|---|
+| Freitag 17:15 | Wochenschluss FTSE (Börsenschluss London) und Gold (LBMA-PM-Fixing) |
+| Montag 00:20 | Wochenschluss Bitcoin (Sonntag 24:00 UTC) |
+| täglich 21:40 | Euro-Kurse für Bewertung und Performance |
+
+Jeder Lauf macht nacheinander:
+
+1. die Tests laufen lassen
+2. Yahoo (VWRD.L bereinigt, BTC-USD, GC=F, VWCE.DE, BTC-EUR, SGBS.MI, EURUSD=X) und LBMA (Gold PM) abrufen
+3. daraus Wochenpunkte bilden, nur abgeschlossene Wochen
+4. den Regelstand rechnen und `site/data/market.js` committen
+5. die Seite auf GitHub Pages veröffentlichen
+
+Bei einem **neuen Kauf- oder Verkaufssignal** schickt er eine Telegram-Nachricht mit Begründung, Handelstag und nächster Schwelle. Jedes Signal wird nur einmal gemeldet. Fällt eine Quelle aus, bleiben die alten Daten stehen, und die Übersicht zeigt einen Hinweis (O-14 ist noch offen).
+
+## Betrieb einrichten (einmalig)
+
+1. **Diesen Stand nach `main` bringen.** GitHub führt geplante Workflows nur auf dem Standard-Branch aus.
+2. **GitHub Pages einschalten:** Repo → *Settings* → *Pages* → *Build and deployment* → *Source*: **GitHub Actions**.
+3. **Telegram-Bot anlegen:**
+   1. In Telegram **@BotFather** öffnen, `/newbot` senden, Namen vergeben. Du bekommst ein **Token**.
+   2. Deinem neuen Bot eine beliebige Nachricht schicken, z. B. `/start`.
+   3. Im Browser `https://api.telegram.org/bot<TOKEN>/getUpdates` öffnen und die Zahl bei `"chat":{"id": …}` notieren. Das ist die **Chat-ID**.
+4. **Secrets hinterlegen:** Repo → *Settings* → *Secrets and variables* → *Actions* → *New repository secret*:
+   - `TELEGRAM_BOT_TOKEN` = Token
+   - `TELEGRAM_CHAT_ID` = Chat-ID
+
+   Die Werte stehen nie im Code und nie in `market.js`.
+5. **Testen:** Repo → *Actions* → „Kursdaten, Signale und Website“ → *Run workflow*, Häkchen bei „Telegram-Testnachricht“ setzen. Du bekommst den aktuellen Regelstand aufs Handy, und die Seite ist unter der Pages-Adresse erreichbar.
+
+Hinweise:
+
+- **Öffentlich:** Die Seite ist öffentlich wie das Repo.
+- **Deine Eingaben:** Transaktionen, Cash und Steuerlage speichert die Seite im jeweiligen Browser. Exportiere sie über *Depot → Daten exportieren*.
+- **Verzögerungen:** GitHub startet geplante Läufe manchmal einige Minuten später. Der Job zählt trotzdem nur abgeschlossene Wochen.
 
 ## Geprüft
 
-`npm test` rechnet die Beispiele aus Abschnitt 9 exakt nach: SMA50 und Schwellen (B-1, B-6), die Signalfolgen (B-2 bis B-5), Depotbewertung und Abnahme 7.1 (14.174,48 €; 49,7 / 26,3 / 24,0 %), die Steuerbeispiele (B-8) und das Rebalancing (B-9 bis B-12).
+`npm test` rechnet die Beispiele aus Abschnitt 9 exakt nach:
+- SMA50 und Schwellen (B-1, B-6)
+- die Signalfolgen (B-2 bis B-5)
+- Depotbewertung und Abnahme 7.1 (14.174,48 €)
+- die Steuerbeispiele (B-8)
+- das Rebalancing (B-9 bis B-12)
 
-## Noch nicht enthalten
+Außerdem prüft er den Datenjob mit nachgebauten Yahoo- und LBMA-Antworten:
+- Aus Tageskursen entstehen exakt die Wochenschlüsse aus Anhang A.
+- Ein neues Signal wird genau einmal gemeldet.
 
-Diese Punkte hängen an offenen Fragen oder brauchen einen Server:
+Und den Performance-Verlauf einschließlich der zeitgewichteten Rendite.
 
-- automatischer Datenjob für Yahoo und LBMA (CORS, Vorschlag aus Abschnitt 10)
-- Benachrichtigungen, Hosting und Login (O-11)
-- Umgang mit fehlenden Kursdaten (O-14): derzeit nur ein Hinweis
+## Noch offen
+
+- Vorwarnungen vor dem Wochenschluss (beschlossen, aber Abstand und Zeiten fehlen, O-7)
+- Umgang mit fehlenden Kursdaten über den Hinweis hinaus (O-14)
+- Login (nicht gewünscht, Seite ist öffentlich)

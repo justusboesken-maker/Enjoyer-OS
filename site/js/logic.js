@@ -126,6 +126,50 @@
     return { pos: pos, real: b.real, cash: led.cash, cashNotes: led.notes, invested: totalV, cost: totalCost, total: total };
   }
 
+  /* Depotverlauf in Euro für den Performance-Chart. eur: {ftse:{d,c}, btc:{d,c}, gold:{d,c}} mit täglichen Schlusskursen.
+     value/cost: Positionen ab dem ersten Kauf. total: Depotwert inkl. Cash erst ab dem Cash-Stichtag,
+     weil das Cash davor unbekannt ist. Fehlt für eine gehaltene Position noch ein Kurs, bleibt der Tag leer (null).
+     twr: zeitgewichtete Rendite der Positionen seit dem ersten Kauf. Käufe und Verkäufe zählen als Zu- und Abfluss,
+     r(t) = Wert(t) / (Wert(t−1) + Zufluss(t)) − 1, verkettet. */
+  function performance(tx, eur, cash, today) {
+    var txs = (tx || []).filter(function (t) { return t.units > 0; }).slice().sort(function (a, b) { return a.d < b.d ? -1 : a.d > b.d ? 1 : 0; });
+    if (!txs.length || !eur) return null;
+    var start = txs[0].d, seen = {};
+    ASSETS.forEach(function (a) { var s = eur[a]; if (s) s.d.forEach(function (d) { if (d >= start && d <= today) seen[d] = 1; }); });
+    var ds = Object.keys(seen).sort();
+    if (!ds.length) return null;
+    var idx = {}, px = {}, out = { d: [], value: [], cost: [], total: [], twr: [] }, prevV = 0, prevD = '', growth = 1;
+    ASSETS.forEach(function (a) { idx[a] = 0; px[a] = null; });
+    ds.forEach(function (d) {
+      ASSETS.forEach(function (a) {
+        var s = eur[a]; if (!s) return;
+        while (idx[a] < s.d.length && s.d[idx[a]] <= d) { px[a] = s.c[idx[a]]; idx[a]++; } /* letzter bekannter Kurs */
+      });
+      var upto = txs.filter(function (t) { return t.d <= d; }), b = ENG.book(upto), v = 0, c = 0, complete = true;
+      ASSETS.forEach(function (a) {
+        var u = ENG.units(b.pos[a]);
+        if (u <= 1e-12) return;
+        if (!(px[a] > 0)) complete = false; else v += u * px[a];
+        c += ENG.cost(b.pos[a]);
+      });
+      var flow = 0;
+      txs.forEach(function (t) {
+        if (t.d > prevD && t.d <= d) flow += t.type === 'kauf' ? t.units * t.price + (t.fee || 0) : -(t.units * t.price - (t.fee || 0));
+      });
+      if (complete) {
+        var base = prevV + flow;
+        if (base > 1e-9) growth *= v / base;
+        prevV = v; prevD = d;
+      }
+      out.twr.push(complete ? growth - 1 : null);
+      out.d.push(d);
+      out.value.push(complete ? v : null);
+      out.cost.push(c);
+      out.total.push(complete && d >= cash.date ? v + cashLedger(upto, cash).cash.total : null);
+    });
+    return out;
+  }
+
   /* ---------- Steuern ---------- */
 
   function restMonths(date) { return 12 - (+date.slice(5, 7)); }
@@ -239,7 +283,7 @@
     ASSETS: ASSETS, RULESET: RULESET, TAX_LAW: TAX_LAW, EXAMPLES: EXAMPLES,
     round: round, buildSeries: buildSeries, evalAll: evalAll, nextCloseDate: nextCloseDate, tradeDate: tradeDate,
     hypo: hypo, nextStep: nextStep, thresholdAt: thresholdAt, recommend: recommend,
-    cashLedger: cashLedger, portfolio: portfolio, restMonths: restMonths, taxCfg: taxCfg, tax20: tax20,
+    cashLedger: cashLedger, portfolio: portfolio, performance: performance, restMonths: restMonths, taxCfg: taxCfg, tax20: tax20,
     sellPreview: sellPreview, harvest: harvest, rebalanceInput: rebalanceInput, rebalanceBoth: rebalanceBoth
   };
 });
