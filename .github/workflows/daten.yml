@@ -71,16 +71,21 @@ jobs:
       name: github-pages
       url: ${{ steps.deploy.outputs.page_url }}
     steps:
-      - name: Ist GitHub Pages eingeschaltet?
+      - name: Wie ist GitHub Pages eingestellt?
         id: check
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if gh api "repos/${GITHUB_REPOSITORY}/pages" --silent 2>/dev/null; then
+          BT=$(gh api "repos/${GITHUB_REPOSITORY}/pages" --jq .build_type 2>/dev/null || echo aus)
+          if [ "$BT" = "workflow" ]; then
             echo "on=true" >> "$GITHUB_OUTPUT"
           else
             echo "on=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::GitHub Pages ist noch aus. Einschalten unter Settings → Pages → Source: GitHub Actions."
+            if [ "$BT" = "legacy" ]; then
+              echo "::notice::Pages veröffentlicht direkt aus dem Branch. Die Startseite leitet auf site/ weiter; GitHub baut die Seite nach jedem Daten-Commit selbst neu."
+            else
+              echo "::notice::GitHub Pages ist noch aus. Einschalten unter Settings → Pages → Source: GitHub Actions."
+            fi
           fi
 
       - name: Veröffentlichen

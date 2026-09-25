@@ -520,8 +520,10 @@
         extra: function (i) { return tot[i] == null ? [] : [['seit ' + fdate(d[tot.indexOf(t0)]), eurS(tot[i] - t0) + ' (' + pct(tot[i] / t0 - 1, 2, true) + ')']]; } };
       kpi = tile('Depotwert', eur(t1), 'am ' + fdate(d[last])) + tile('Veränderung im Zeitraum', '<span class="' + (t1 - t0 >= 0 ? 'pos' : 'neg') + '">' + eurS(t1 - t0) + '</span>', pct(t1 / t0 - 1, 2, true) + ' seit ' + fdate(d[tot.indexOf(t0)]));
     } else if (mode === 'twr') {
-      /* Rendite im Zeitraum: auf den ersten Tag des Zeitraums normiert */
-      var tw = sl(p.twr), b0 = tw.find(function (v) { return v != null; }), rel = tw.map(function (v) { return v == null ? null : (1 + v) / (1 + b0) - 1; });
+      /* Rendite im Zeitraum: bei „Max“ ab dem ersten Kauf (inkl. Abweichung Kaufkurs zum Tagesschluss),
+         sonst auf den ersten Tag des Zeitraums normiert */
+      var tw = sl(p.twr), b0 = r[2] === Infinity ? 0 : tw.find(function (v) { return v != null; });
+      var rel = tw.map(function (v) { return v == null ? null : (1 + v) / (1 + b0) - 1; });
       PERF = { d: d, series: [{ label: 'Rendite der Positionen (zeitgewichtet)', values: rel, color: 'var(--violet)', area: 'color-mix(in srgb, var(--violet) 10%, transparent)' }],
         extra: function (i) { return val[i] == null ? [] : [['Wert der Positionen', eur(val[i])]]; }, pct: true };
       kpi = tile('Rendite im Zeitraum', '<span class="' + (rel[last] >= 0 ? 'pos' : 'neg') + '">' + pct(rel[last], 2, true) + '</span>', 'zeitgewichtet, ohne Einfluss von Käufen') +

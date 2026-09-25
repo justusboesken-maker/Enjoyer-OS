@@ -61,7 +61,9 @@ Bei einem **neuen Kauf- oder Verkaufssignal** schickt er eine Telegram-Nachricht
 ## Betrieb einrichten (einmalig)
 
 1. **Diesen Stand nach `main` bringen.** GitHub führt geplante Workflows nur auf dem Standard-Branch aus.
-2. **GitHub Pages einschalten:** Repo → *Settings* → *Pages* → *Build and deployment* → *Source*: **GitHub Actions**.
+2. **GitHub Pages einschalten:** Repo → *Settings* → *Pages* → *Build and deployment* → *Source*. Beide Einstellungen funktionieren:
+   - **GitHub Actions** (empfohlen): Der Workflow veröffentlicht nach jedem Lauf den Ordner `site/`, die App liegt direkt unter der Pages-Adresse.
+   - **Deploy from a branch** (`main`, `/ (root)`): GitHub veröffentlicht das ganze Repo. Die Startseite `index.html` leitet auf `site/` weiter, und GitHub baut die Seite nach jedem Daten-Commit neu.
 3. **Telegram-Bot anlegen:**
    1. In Telegram **@BotFather** öffnen, `/newbot` senden, Namen vergeben. Du bekommst ein **Token**.
    2. Deinem neuen Bot eine beliebige Nachricht schicken, z. B. `/start`.
